@@ -1,0 +1,209 @@
+{
+  "name": "Albano Luz — novo lead (e-mail + WhatsApp)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "albano-luz-novo-lead",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "5f0c1a52-3d8e-4b7a-9a41-0c7d2e6b1a01",
+      "name": "Webhook novo lead",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 300],
+      "webhookId": "b7d3c0e4-8f1a-4c55-9e2b-6a1f0c3d9e21"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "c1e9a7b0-2b6f-4f1e-8d3a-5a9b7c2d4e01",
+              "leftValue": "={{ String($json.headers['x-webhook-secret'] ?? '') === String($env.ALBANO_WEBHOOK_SECRET ?? '') && $json.body?.evento === 'lead_enviado' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "5f0c1a52-3d8e-4b7a-9a41-0c7d2e6b1a02",
+      "name": "Segredo confere?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "{ \"ok\": false, \"erro\": \"não autorizado\" }",
+        "options": {
+          "responseCode": 401
+        }
+      },
+      "id": "5f0c1a52-3d8e-4b7a-9a41-0c7d2e6b1a03",
+      "name": "Recusar (401)",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [480, 460]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Monta o e-mail (HTML com os dados escapados) e o texto do WhatsApp.\nconst dados = $input.first().json.body ?? {};\nconst lead = dados.lead ?? {};\n\nconst esc = (v) =>\n  String(v ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]);\nconst ouTraco = (v) => (v === null || v === undefined || v === '' ? '—' : v);\n\nconst recebidoEm = lead.created_at\n  ? new Date(lead.created_at).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', dateStyle: 'short', timeStyle: 'short' })\n  : '—';\nconst servicos = (dados.servicos_labels ?? []).join(', ');\nconst area = lead.area_m2 ? `${Number(lead.area_m2).toLocaleString('pt-BR')} m²` : null;\n\nconst linhas = [\n  ['Recebido em', recebidoEm],\n  ['Nome', lead.nome],\n  ['Telefone', lead.telefone],\n  ['E-mail', lead.email],\n  ['Empresa', lead.empresa],\n  ['Perfil', dados.perfil_label],\n  ['Serviços', servicos],\n  ['Cidade da obra', lead.cidade],\n  ['Área aproximada', area],\n  ['Página de origem', lead.origem],\n];\n\nconst linhaHtml = ([rotulo, valor]) =>\n  `<tr><th align=\"left\" style=\"padding:6px 12px 6px 0;color:#4a4a4a;font-weight:600;vertical-align:top;white-space:nowrap\">${esc(rotulo)}</th><td style=\"padding:6px 0;color:#16202e\">${esc(ouTraco(valor))}</td></tr>`;\n\nconst botao = (href, texto) =>\n  href\n    ? `<a href=\"${esc(href)}\" style=\"display:inline-block;margin:0 8px 8px 0;padding:10px 16px;background:#0f2344;color:#ffffff;text-decoration:none;border-radius:4px;font-weight:600\">${esc(texto)}</a>`\n    : '';\n\nconst mensagemHtml = lead.mensagem\n  ? `<h3 style=\"font-family:Georgia,serif;color:#0f2344;margin:24px 0 8px\">Mensagem</h3><p style=\"white-space:pre-wrap;margin:0;color:#16202e\">${esc(lead.mensagem)}</p>`\n  : '';\n\nconst anexoHtml = dados.anexo_url\n  ? `<p style=\"margin:16px 0 0;color:#4a4a4a\">O cliente enviou um anexo. O link abaixo vale por 7 dias.</p>`\n  : '';\n\nconst html = `<!doctype html><html lang=\"pt-BR\"><body style=\"margin:0;padding:24px;background:#e8e8e6;font-family:Arial,Helvetica,sans-serif\">\n<div style=\"max-width:640px;margin:0 auto;background:#ffffff;border-top:6px solid #0f2344;padding:24px\">\n<h2 style=\"font-family:Georgia,serif;color:#0f2344;margin:0 0 4px\">Novo pedido de orçamento</h2>\n<p style=\"margin:0 0 16px;color:#4a4a4a\">Enviado pelo site albanoluz.com</p>\n<table cellpadding=\"0\" cellspacing=\"0\" style=\"border-collapse:collapse;font-size:14px\">${linhas.map(linhaHtml).join('')}</table>\n${mensagemHtml}\n${anexoHtml}\n<div style=\"margin-top:24px\">${botao(dados.whatsapp_url, 'Responder no WhatsApp')}${botao(dados.anexo_url, 'Baixar anexo')}${botao(dados.painel_url, 'Abrir no painel')}</div>\n</div></body></html>`;\n\nconst assunto = `Novo orçamento: ${lead.nome ?? 'sem nome'}${dados.perfil_label ? ` (${dados.perfil_label})` : ''}`;\n\nconst whatsapp = [\n  '*Novo pedido de orçamento pelo site*',\n  '',\n  `*Nome:* ${ouTraco(lead.nome)}`,\n  `*Telefone:* ${ouTraco(lead.telefone)}`,\n  lead.email ? `*E-mail:* ${lead.email}` : null,\n  lead.empresa ? `*Empresa:* ${lead.empresa}` : null,\n  `*Perfil:* ${ouTraco(dados.perfil_label)}`,\n  servicos ? `*Serviços:* ${servicos}` : null,\n  lead.cidade ? `*Cidade:* ${lead.cidade}` : null,\n  area ? `*Área:* ${area}` : null,\n  lead.mensagem ? `*Mensagem:* ${String(lead.mensagem).slice(0, 400)}${String(lead.mensagem).length > 400 ? '…' : ''}` : null,\n  dados.anexo_url ? '*Anexo:* sim (link no e-mail)' : null,\n  '',\n  dados.whatsapp_url ? `Responder: ${dados.whatsapp_url}` : null,\n  dados.painel_url ? `Painel: ${dados.painel_url}` : null,\n]\n  .filter((l) => l !== null)\n  .join('\\n');\n\nreturn [{ json: { assunto, html, whatsapp, responder_para: lead.email || '' } }];\n"
+      },
+      "id": "5f0c1a52-3d8e-4b7a-9a41-0c7d2e6b1a04",
+      "name": "Montar mensagens",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [480, 200]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "{ \"ok\": true }",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "5f0c1a52-3d8e-4b7a-9a41-0c7d2e6b1a05",
+      "name": "Responder 200",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [720, 200]
+    },
+    {
+      "parameters": {
+        "fromEmail": "Site Albano Luz <albano.luzengenharia@gmail.com>",
+        "toEmail": "albano.luzengenharia@gmail.com",
+        "subject": "={{ $('Montar mensagens').first().json.assunto }}",
+        "emailFormat": "html",
+        "html": "={{ $('Montar mensagens').first().json.html }}",
+        "options": {
+          "appendAttribution": false,
+          "replyTo": "={{ $('Montar mensagens').first().json.responder_para }}"
+        }
+      },
+      "id": "5f0c1a52-3d8e-4b7a-9a41-0c7d2e6b1a06",
+      "name": "Enviar e-mail",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [960, 200],
+      "credentials": {
+        "smtp": {
+          "id": "SUBSTITUIR_ID_CREDENCIAL_SMTP",
+          "name": "SMTP Albano Luz"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.EVOLUTION_URL }}/message/sendText/{{ $env.EVOLUTION_INSTANCE }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.EVOLUTION_APIKEY }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ number: '5511932742355', text: $('Montar mensagens').first().json.whatsapp }) }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "5f0c1a52-3d8e-4b7a-9a41-0c7d2e6b1a07",
+      "name": "WhatsApp da equipe (Evolution API)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1200, 200],
+      "onError": "continueRegularOutput"
+    }
+  ],
+  "connections": {
+    "Webhook novo lead": {
+      "main": [
+        [
+          {
+            "node": "Segredo confere?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Segredo confere?": {
+      "main": [
+        [
+          {
+            "node": "Montar mensagens",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Recusar (401)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Montar mensagens": {
+      "main": [
+        [
+          {
+            "node": "Responder 200",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Responder 200": {
+      "main": [
+        [
+          {
+            "node": "Enviar e-mail",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enviar e-mail": {
+      "main": [
+        [
+          {
+            "node": "WhatsApp da equipe (Evolution API)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "tags": []
+}
