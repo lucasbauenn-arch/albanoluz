@@ -65,7 +65,7 @@ Os pontos abaixo estão marcados com `PENDENTE` no código:
 
 - [ ] Cidade(s) de atuação — hoje o site assume São Paulo e região (`src/config/site.ts`)
 - [ ] Confirmar o @ do Instagram
-- [ ] Logo em vetor, códigos de cor e fontes oficiais (o monograma AL foi redesenhado em SVG)
+- [ ] Logo em vetor original, códigos de cor e fontes oficiais. Hoje o logo em `public/marca/` foi vetorizado a partir da imagem enviada (`marca/logo-original.webp`, via `marca/vetorizar-logo.cjs`)
 - [ ] Fotos reais das obras e dados de cada uma (hoje: ilustrações técnicas provisórias)
 - [ ] Nome, foto, mini-bio e CREA do responsável técnico; CNPJ
 - [ ] Depoimentos de clientes, com autorização

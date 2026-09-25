@@ -46,7 +46,7 @@ export function Cabecalho() {
     <header className="sticky top-0 z-50 border-b border-marinho/10 bg-white/95 backdrop-blur supports-[backdrop-filter]:bg-white/85">
       <div className="container-site flex h-16 items-center justify-between gap-6 lg:h-20">
         <Link to="/" aria-label={`${SITE.nome}, página inicial`} className="shrink-0">
-          <Logo />
+          <Logo className="h-11 w-auto lg:h-14" />
         </Link>
 
         <nav aria-label="Menu principal" className="hidden lg:block">

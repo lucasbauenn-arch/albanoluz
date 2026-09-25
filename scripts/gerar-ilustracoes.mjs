@@ -161,20 +161,21 @@ function svgDoc({ w = 1200, h = 900, th, defs = [], css = '', body, grid = false
   );
 }
 
-/** Monograma (mesma geometria do favicon.svg, viewBox 0 0 100 100) */
-const MONO_LETRAS =
-  '<polygon points="36.5,24 39,24 23.5,74 21,74"/><polygon points="37,24 40,24 55,74 46,74"/>' +
-  '<rect x="28" y="55" width="16" height="2.5"/><rect x="17" y="73.5" width="12" height="2.5"/>' +
-  '<rect x="43" y="73.5" width="15" height="2.5"/><rect x="60" y="26" width="8" height="50"/>' +
-  '<rect x="56" y="24" width="16" height="2.5"/><rect x="56" y="73.5" width="6" height="2.5"/>' +
-  '<rect x="60" y="72" width="24" height="4"/><rect x="81.5" y="65" width="2.5" height="11"/>';
+/** Marca oficial (public/marca, vetorizada de marca/logo-original.webp) */
+function lerMarca(arquivo) {
+  const svg = readFileSync(join(PUB, 'marca', arquivo), 'utf8');
+  const [x, y, w, h] = svg.match(/viewBox="([^"]+)"/)[1].split(' ').map(Number);
+  return { x, y, w, h, d: svg.match(/ d="([^"]+)"/)[1] };
+}
+const MONO = lerMarca('monograma-simplificado-branco.svg');
+const LOGO = lerMarca('logo-branco.svg');
+function marca(m, x, y, largura, fill) {
+  return `<path transform="translate(${N(x)} ${N(y)}) scale(${(largura / m.w).toFixed(5)}) translate(${-m.x} ${-m.y})" fill="${fill}" fill-rule="evenodd" d="${m.d}"/>`;
+}
 function monograma(x, y, size, bg = NAVY, fg = '#fff') {
-  return (
-    `<g transform="translate(${N(x)} ${N(y)}) scale(${N3(size / 100)})">` +
-    `<rect width="100" height="100" fill="${bg}"/>` +
-    `<g fill="none" stroke="${fg}"><rect x="6" y="6" width="88" height="88" stroke-width="3"/><rect x="12" y="12" width="76" height="76" stroke-width="1.2"/></g>` +
-    `<g fill="${fg}">${MONO_LETRAS}</g></g>`
-  );
+  const larg = size * 0.86;
+  const alt = (larg * MONO.h) / MONO.w;
+  return `<rect x="${N(x)}" y="${N(y)}" width="${N(size)}" height="${N(size)}" fill="${bg}"/>` + marca(MONO, x + (size - larg) / 2, y + (size - alt) / 2, larg, fg);
 }
 
 /** Moldura da prancha + carimbo */
@@ -911,9 +912,7 @@ function ogSVG() {
   const body = [
     G({ opacity: 0.62 }, isoEixos(P, th, xs, ys, { ext: 2.6, r: 0.5, fs: 10 }), desenhaAndares(P, andares), rb, s4),
     `<rect width="720" height="${H}" fill="url(#fade)"/>`,
-    monograma(80, 84, 128),
-    T(236, 150, 'ALBANO LUZ', { ff, fs: 56, fill: '#fff', ls: 4 }),
-    T(239, 192, 'ENGENHARIA', { ff: sf, fs: 17, fill: NV4, ls: 11.5 }),
+    marca(LOGO, 80, 66, 450, '#fff'),
     ln(80, 268, 150, 268, { stroke: NV4, 'stroke-width': 2 }),
     T(80, 330, 'Cálculo estrutural seguro', { ff, fs: 38, fill: '#fff' }),
     T(80, 378, 'e econômico para arquitetos', { ff, fs: 38, fill: '#fff' }),
@@ -3633,7 +3632,7 @@ async function gerarPNGs() {
     ['icon-192.png', 192, false],
     ['icon-512.png', 512, false],
   ]) {
-    let img = sharp(fav, { density: (72 * size) / 100 }).resize(size, size);
+    let img = sharp(fav).resize(size, size);
     if (opaco) img = img.flatten({ background: NAVY });
     await img.png({ compressionLevel: 9 }).toFile(join(PUB, nome));
     console.log(`  ${nome}`);

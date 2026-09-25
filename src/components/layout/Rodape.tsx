@@ -15,7 +15,7 @@ export function Rodape() {
       <div className="container-site grid gap-12 py-16 sm:grid-cols-2 lg:grid-cols-[1.3fr_1fr_1fr_1.2fr]">
         <div>
           <Link to="/" aria-label={`${SITE.nome}, página inicial`} className="inline-block">
-            <Logo claro />
+            <Logo claro className="h-20 w-auto" />
           </Link>
           <p className="mt-6 max-w-xs text-[0.95rem] leading-relaxed">
             Cálculo estrutural e projetos complementares com segurança e economia. Há mais de {SITE.anosMercado} anos
