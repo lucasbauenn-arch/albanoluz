@@ -32,3 +32,6 @@ supabase/.branches
 
 # Claude Code local settings
 .claude/settings.local.json
+
+# Pacotes do build gerados localmente
+*.zip
