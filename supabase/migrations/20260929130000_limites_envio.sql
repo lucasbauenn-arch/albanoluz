@@ -13,7 +13,8 @@
 -- certo ao visitante.
 --
 -- Não existe limite pelo volume total: acima de 30 leads em 10 minutos a
--- função grava o lead normalmente e só deixa de avisar o n8n (disjuntor).
+-- função grava o lead normalmente e só deixa de enviar o e-mail de aviso à
+-- equipe (disjuntor).
 --
 -- Os números ficam repetidos em supabase/functions/enviar-lead/index.ts
 -- (pré-checagem); mude os dois juntos.

@@ -2,7 +2,7 @@
 //
 // Recebe o formulário de orçamento do site (multipart/form-data), valida,
 // limita envios repetidos, guarda o anexo no bucket privado "anexos", grava o
-// lead com a service role e avisa o n8n (e-mail + WhatsApp da equipe).
+// lead com a service role e avisa a equipe por e-mail (SMTP, direto daqui).
 //
 // Requer a migração 20260929130000_limites_envio.sql (coluna leads.origem_hash
 // e trigger de limite), aplicada antes do deploy.
@@ -11,6 +11,10 @@
 // Secrets: ver supabase/README.md
 
 import { createClient, type SupabaseClient } from 'npm:@supabase/supabase-js@2.117.2'
+// O nodemailer é carregado só na hora do envio (import dinâmico em
+// notificarEquipePorEmail): se ele falhar no Edge Runtime, só o e-mail deixa de
+// sair; a função continua subindo e gravando os leads.
+type Nodemailer = typeof import('npm:nodemailer@10.0.12')
 
 // -----------------------------------------------------------------------------
 // Configuração
@@ -19,9 +23,51 @@ import { createClient, type SupabaseClient } from 'npm:@supabase/supabase-js@2.1
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL') ?? ''
 const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
 const TURNSTILE_SECRET_KEY = Deno.env.get('TURNSTILE_SECRET_KEY') ?? ''
-const N8N_WEBHOOK_URL = Deno.env.get('N8N_WEBHOOK_URL') ?? ''
-const N8N_WEBHOOK_SECRET = Deno.env.get('N8N_WEBHOOK_SECRET') ?? ''
 const SITE_URL = (Deno.env.get('SITE_URL') ?? 'https://albanoluz.com').replace(/\/$/, '')
+
+// Aviso de novo lead por e-mail, enviado pela própria função via SMTP. Sem
+// SMTP_HOST, SMTP_USER e SMTP_PASS o lead é gravado normalmente e o aviso é
+// pulado (fica registrado no log).
+// O Supabase bloqueia a saída pelas portas 25 e 587 nas Edge Functions: use a
+// porta 465, com TLS implícito (o padrão). Em outra porta liberada (ex.: 2525),
+// a conexão exige STARTTLS.
+const SMTP_HOST = (Deno.env.get('SMTP_HOST') ?? '').trim()
+const SMTP_USER = (Deno.env.get('SMTP_USER') ?? '').trim()
+const SMTP_PASS = Deno.env.get('SMTP_PASS') ?? ''
+const SMTP_FROM = (Deno.env.get('SMTP_FROM') ?? '').trim() // padrão: SMTP_USER; aceita 'Nome <email>'
+const SMTP_PORT = (() => {
+  const bruto = (Deno.env.get('SMTP_PORT') ?? '').trim()
+  const porta = bruto ? Number(bruto) : 465
+  if (!Number.isInteger(porta) || porta < 1 || porta > 65535) {
+    console.warn(`SMTP_PORT inválida ("${bruto}"): usando a porta 465.`)
+    return 465
+  }
+  if (SMTP_HOST && (porta === 25 || porta === 587)) {
+    console.warn(
+      `SMTP_PORT=${porta}: o Supabase bloqueia as portas 25 e 587 nas Edge Functions e o aviso por e-mail vai falhar. Use a porta 465.`,
+    )
+  }
+  return porta
+})()
+const TIMEOUT_SMTP_MS = 10_000 // conexão, saudação do servidor e cada etapa do envio
+
+// E-mail usado em Reply-To, mailto e destinatários: só caracteres que não mudam
+// o sentido do cabeçalho nem do link (sem espaço, vírgula, aspas, "<", "?"...).
+const EMAIL_SEGURO = /^[a-z0-9._+-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)+$/i
+
+// Destinatários do aviso (secret EMAIL_EQUIPE, separados por vírgula).
+const EMAIL_EQUIPE_PADRAO = 'albano.luzengenharia@gmail.com'
+const EMAILS_EQUIPE = (() => {
+  const lista = (Deno.env.get('EMAIL_EQUIPE') ?? '')
+    .split(',')
+    .map((e) => e.trim().toLowerCase())
+    .filter(Boolean)
+  const invalidos = lista.filter((e) => !emailSeguro(e))
+  if (invalidos.length) console.warn(`EMAIL_EQUIPE: endereço(s) ignorado(s) por formato inválido: ${invalidos.join(', ')}`)
+  const validos = [...new Set(lista.filter(emailSeguro))]
+  if (lista.length && !validos.length) console.warn(`EMAIL_EQUIPE sem endereço válido: o aviso vai para ${EMAIL_EQUIPE_PADRAO}.`)
+  return validos.length ? validos : [EMAIL_EQUIPE_PADRAO]
+})()
 
 const ORIGENS_PADRAO = [
   'https://albanoluz.com',
@@ -51,8 +97,8 @@ const LIMITE_POR_TELEFONE = 3 // leads do mesmo telefone na janela
 const LIMITE_POR_ORIGEM = 5 // leads da mesma origem (hash do IP) na janela
 const JANELA_ANEXOS_MS = 60 * 60 * 1000 // 1 hora
 const LIMITE_ANEXOS = 10 // leads com anexo na janela de 1 hora, no total
-// Disjuntor: acima deste total na janela de 10 minutos o lead é gravado, mas o
-// n8n não é avisado. Nenhum pedido é recusado pelo volume total.
+// Disjuntor: acima deste total na janela de 10 minutos o lead é gravado, mas a
+// equipe não recebe o e-mail de aviso. Nenhum pedido é recusado pelo volume total.
 const LIMITE_NOTIFICACOES = 30
 const WHATSAPP_EXIBICAO = '(11) 93274-2355' // mesmo número de src/config/site.ts
 
@@ -358,7 +404,7 @@ async function verificarLimiteEnvios(
 }
 
 // -----------------------------------------------------------------------------
-// Notificação (n8n)
+// Aviso por e-mail (SMTP)
 // -----------------------------------------------------------------------------
 
 type LeadGravado = {
@@ -386,8 +432,163 @@ function linkWhatsApp(telefone: string): string | null {
   return `https://wa.me/${d}`
 }
 
-async function notificarN8n(admin: SupabaseClient, lead: LeadGravado): Promise<void> {
-  if (!N8N_WEBHOOK_URL) return
+function emailSeguro(email: string): boolean {
+  return email.length <= 254 && EMAIL_SEGURO.test(email)
+}
+
+const ENTIDADES_HTML: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }
+
+// Todo texto vindo do visitante passa por aqui antes de entrar no HTML do e-mail.
+function escaparHtml(valor: string): string {
+  return valor.replace(/[&<>"']/g, (c) => ENTIDADES_HTML[c])
+}
+
+// Texto de uma linha só, para o assunto e o nome do Reply-To: quebras de linha e
+// outros caracteres de controle viram espaço (senão abririam um cabeçalho novo).
+function umaLinha(valor: string): string {
+  return valor.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]+/gu, ' ').replace(/\s+/g, ' ').trim()
+}
+
+const FORMATO_DATA_HORA = new Intl.DateTimeFormat('pt-BR', {
+  timeZone: 'America/Sao_Paulo',
+  day: '2-digit',
+  month: '2-digit',
+  year: 'numeric',
+  hour: '2-digit',
+  minute: '2-digit',
+  hourCycle: 'h23',
+})
+const FORMATO_AREA = new Intl.NumberFormat('pt-BR', { maximumFractionDigits: 2 })
+
+function dataHoraBrasilia(iso: string): string {
+  const data = new Date(iso)
+  if (Number.isNaN(data.getTime())) return iso
+  const p = Object.fromEntries(FORMATO_DATA_HORA.formatToParts(data).map((parte) => [parte.type, parte.value]))
+  return `${p.day}/${p.month}/${p.year} às ${p.hour}:${p.minute} (horário de Brasília)`
+}
+
+// Estilos inline: muitos leitores de e-mail ignoram <style>.
+const ESTILOS_EMAIL = {
+  corpo: 'margin:0;padding:24px;background:#f4f4f5;font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#1f2937',
+  caixa: 'max-width:600px;margin:0 auto;background:#ffffff;border-radius:8px;padding:24px',
+  titulo: 'margin:0 0 16px;font-size:20px',
+  subtitulo: 'margin:20px 0 8px;font-size:16px',
+  tabela: 'border-collapse:collapse;width:100%;font-size:14px',
+  rotulo: 'text-align:left;vertical-align:top;padding:6px 16px 6px 0;color:#6b7280;font-weight:normal;white-space:nowrap',
+  celula: 'padding:6px 0',
+  discreto: 'color:#6b7280',
+  botao: 'display:inline-block;background:#1f2937;color:#ffffff;padding:10px 18px;border-radius:6px;text-decoration:none',
+  rodape: 'margin:24px 0 0;font-size:12px;color:#6b7280',
+}
+
+type Aviso = {
+  assunto: string
+  texto: string
+  html: string
+  responderPara: { name: string; address: string } | undefined
+}
+
+function montarAviso(lead: LeadGravado, anexoUrl: string | null): Aviso {
+  const nome = umaLinha(lead.nome)
+  const perfil = PERFIS[lead.perfil] ?? lead.perfil
+  const servicos = lead.servicos.map((s) => SERVICOS[s] ?? s)
+  const whatsapp = linkWhatsApp(lead.telefone)
+  const email = lead.email && emailSeguro(lead.email) ? lead.email : null
+  const painel = `${SITE_URL}/admin?aba=leads&lead=${encodeURIComponent(lead.id)}`
+  // anexo_path = AAAA/MM/<uuid>-<nome do arquivo>
+  const arquivo = lead.anexo_path?.slice(lead.anexo_path.lastIndexOf('/') + 1) ?? null
+  const nomeAnexo = arquivo?.replace(/^[0-9a-f-]{36}-/i, '') ?? null
+  const area = lead.area_m2 === null ? null : `${FORMATO_AREA.format(Number(lead.area_m2))} m²`
+  const mensagem = lead.mensagem?.replace(/\r\n?/g, '\n') ?? null
+  const h = escaparHtml
+  const telefone = umaLinha(lead.telefone)
+
+  // [rótulo, valor (uma linha, texto puro), valor no HTML (já escapado)]
+  const campos: [string, string | null, string?][] = [
+    ['Nome', nome],
+    ['Telefone', telefone, whatsapp ? `${h(telefone)} · <a href="${h(whatsapp)}">abrir no WhatsApp</a>` : undefined],
+    ['E-mail', lead.email, email ? `<a href="mailto:${h(email)}">${h(email)}</a>` : undefined],
+    ['Empresa', lead.empresa],
+    ['Perfil', perfil],
+    ['Serviços', servicos.length ? servicos.join(', ') : null],
+    ['Cidade', lead.cidade],
+    ['Área', area],
+    ['Origem', lead.origem],
+    ['Recebido em', dataHoraBrasilia(lead.created_at)],
+  ]
+  const valor = (v: string | null) => (v ? umaLinha(v) : '—')
+
+  const texto = [
+    'Novo pedido de orçamento recebido pelo site.',
+    '',
+    ...campos.map(([rotulo, v]) => `${rotulo}: ${valor(v)}`),
+    ...(whatsapp ? [`WhatsApp do cliente: ${whatsapp}`] : []),
+    '',
+    'Mensagem:',
+    mensagem ?? '(sem mensagem)',
+    '',
+    `Anexo: ${nomeAnexo ?? 'nenhum'}`,
+    ...(nomeAnexo && anexoUrl ? [`Baixar o anexo (link válido por 7 dias): ${anexoUrl}`] : []),
+    ...(nomeAnexo && !anexoUrl ? ['Link do anexo indisponível: baixe pelo painel.'] : []),
+    '',
+    `Ver no painel: ${painel}`,
+    ...(email ? ['', 'Responda este e-mail para escrever direto para o cliente.'] : []),
+  ].join('\n')
+
+  const e = ESTILOS_EMAIL
+  const blocoAnexo = !nomeAnexo
+    ? 'nenhum'
+    : anexoUrl
+    ? `<a href="${h(anexoUrl)}">${h(nomeAnexo)}</a> <span style="${e.discreto}">(link válido por 7 dias)</span>`
+    : `${h(nomeAnexo)} <span style="${e.discreto}">(link indisponível: baixe pelo painel)</span>`
+  const mensagemHtml = mensagem ? h(mensagem).replaceAll('\n', '<br>\n') : `<span style="${e.discreto}">(sem mensagem)</span>`
+
+  const html = [
+    '<!doctype html>',
+    '<html lang="pt-BR">',
+    '<head><meta charset="utf-8"><title>Novo pedido de orçamento</title></head>',
+    `<body style="${e.corpo}">`,
+    `<div style="${e.caixa}">`,
+    `<h1 style="${e.titulo}">Novo pedido de orçamento</h1>`,
+    `<table role="presentation" style="${e.tabela}">`,
+    ...campos.map(([rotulo, v, vHtml]) =>
+      `<tr><th style="${e.rotulo}">${h(rotulo)}</th><td style="${e.celula}">${vHtml ?? h(valor(v))}</td></tr>`
+    ),
+    '</table>',
+    `<h2 style="${e.subtitulo}">Mensagem</h2>`,
+    `<p style="margin:0">${mensagemHtml}</p>`,
+    `<p style="margin:20px 0 0"><strong>Anexo:</strong> ${blocoAnexo}</p>`,
+    `<p style="margin:24px 0 0"><a href="${h(painel)}" style="${e.botao}">Ver no painel</a></p>`,
+    ...(email ? [`<p style="${e.rodape}">Responda este e-mail para escrever direto para o cliente.</p>`] : []),
+    '</div>',
+    '</body>',
+    '</html>',
+  ].join('\n')
+
+  return {
+    assunto: `Novo pedido de orçamento — ${nome} (${perfil})`,
+    texto,
+    html,
+    responderPara: email ? { name: nome, address: email } : undefined,
+  }
+}
+
+// Nome anunciado no EHLO. Sem ele, o nodemailer usaria o hostname da máquina
+// que roda a função.
+const NOME_EHLO = (() => {
+  try {
+    return new URL(SITE_URL).hostname || 'albanoluz.com'
+  } catch {
+    return 'albanoluz.com'
+  }
+})()
+
+async function notificarEquipePorEmail(admin: SupabaseClient, lead: LeadGravado): Promise<void> {
+  const remetente = SMTP_FROM || (SMTP_USER.includes('@') ? { name: 'Site Albano Luz', address: SMTP_USER } : null)
+  if (!remetente) {
+    console.error(`SMTP_USER não é um e-mail e SMTP_FROM não foi definido: lead ${lead.id} gravado sem o e-mail de aviso.`)
+    return
+  }
   try {
     let anexoUrl: string | null = null
     if (lead.anexo_path) {
@@ -398,40 +599,65 @@ async function notificarN8n(admin: SupabaseClient, lead: LeadGravado): Promise<v
       anexoUrl = data?.signedUrl ?? null
     }
 
-    const payload = {
-      evento: 'lead_enviado',
-      lead,
-      perfil_label: PERFIS[lead.perfil],
-      servicos_labels: lead.servicos.map((s) => SERVICOS[s] ?? s),
-      anexo_url: anexoUrl,
-      whatsapp_url: linkWhatsApp(lead.telefone),
-      painel_url: `${SITE_URL}/admin?aba=leads&lead=${lead.id}`,
-    }
-
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-    if (N8N_WEBHOOK_SECRET) headers['x-webhook-secret'] = N8N_WEBHOOK_SECRET
-
-    const resp = await fetch(N8N_WEBHOOK_URL, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(payload),
-      signal: AbortSignal.timeout(10_000),
+    const aviso = montarAviso(lead, anexoUrl)
+    const { default: nodemailer }: Nodemailer = await import('npm:nodemailer@10.0.12')
+    // Porta 465: TLS desde o início da conexão. Outras portas: STARTTLS
+    // obrigatório (sem ele o envio falha, em vez de mandar a senha sem cifra).
+    const transporte = nodemailer.createTransport({
+      host: SMTP_HOST,
+      port: SMTP_PORT,
+      secure: SMTP_PORT === 465,
+      requireTLS: SMTP_PORT !== 465,
+      auth: { user: SMTP_USER, pass: SMTP_PASS },
+      name: NOME_EHLO,
+      connectionTimeout: TIMEOUT_SMTP_MS,
+      greetingTimeout: TIMEOUT_SMTP_MS,
+      socketTimeout: TIMEOUT_SMTP_MS,
+      dnsTimeout: TIMEOUT_SMTP_MS,
     })
-    if (!resp.ok) {
-      console.error(`n8n respondeu ${resp.status}:`, (await resp.text()).slice(0, 500))
+    try {
+      const info = await transporte.sendMail({
+        from: remetente,
+        to: EMAILS_EQUIPE,
+        replyTo: aviso.responderPara,
+        subject: aviso.assunto,
+        text: aviso.texto,
+        html: aviso.html,
+      })
+      if (info.rejected.length) {
+        console.error(`SMTP: o servidor recusou destinatário(s) do aviso do lead ${lead.id}: ${info.rejected.join(', ')}`)
+      }
+      console.log(`SMTP: aviso do lead ${lead.id} enviado por e-mail para ${info.accepted.length} destinatário(s).`)
+    } finally {
+      transporte.close()
     }
   } catch (erro) {
-    // Falha de notificação não invalida o lead, que já está salvo no banco.
-    console.error('Falha ao notificar o n8n:', erro)
+    // Falha no aviso não invalida o lead, que já está salvo no banco. Erros do
+    // nodemailer trazem código (EAUTH, ESOCKET, ETIMEDOUT...) e nunca a senha.
+    const e = erro as { code?: unknown; command?: unknown; message?: unknown }
+    if (typeof e?.code === 'string') {
+      const etapa = typeof e.command === 'string' ? ` em ${e.command}` : ''
+      console.error(`SMTP: falha ao enviar o e-mail de aviso do lead ${lead.id} [${e.code}${etapa}]: ${e.message}`)
+    } else {
+      console.error(`SMTP: falha ao enviar o e-mail de aviso do lead ${lead.id}:`, erro)
+    }
   }
 }
 
 // Disjuntor: acima de LIMITE_NOTIFICACOES leads nos 10 minutos (este incluído),
-// o lead fica gravado e aparece no painel, mas o n8n não é chamado. Assim um
-// ataque com telefones e IPs variados não lota o e-mail e o WhatsApp da equipe.
-// Se a contagem falhar, avisa mesmo assim.
+// o lead fica gravado e aparece no painel, mas o e-mail não é enviado. Assim um
+// ataque com telefones e IPs variados não lota a caixa de entrada da equipe nem
+// esgota o limite diário do SMTP. Se a contagem falhar, avisa mesmo assim.
 async function notificarEquipe(admin: SupabaseClient, lead: LeadGravado): Promise<void> {
-  if (!N8N_WEBHOOK_URL) return
+  const faltando = Object.entries({ SMTP_HOST, SMTP_USER, SMTP_PASS })
+    .filter(([, valor]) => !valor)
+    .map(([nome]) => nome)
+  if (faltando.length) {
+    console.warn(
+      `Aviso por e-mail desligado (secrets ausentes: ${faltando.join(', ')}): lead ${lead.id} gravado sem avisar a equipe.`,
+    )
+    return
+  }
   const gravadoEm = Date.parse(lead.created_at)
   try {
     const { count, status, error } = await contarLeads(
@@ -441,17 +667,17 @@ async function notificarEquipe(admin: SupabaseClient, lead: LeadGravado): Promis
     )
     if (error || count === null) {
       console.error(
-        `Falha ao contar os envios recentes (HTTP ${status}); avisando o n8n mesmo assim:`,
+        `Falha ao contar os envios recentes (HTTP ${status}); enviando o e-mail de aviso mesmo assim:`,
         error?.message || 'sem contagem',
       )
     } else if (count > LIMITE_NOTIFICACOES) {
-      console.warn(`Disjuntor: ${count} leads nos últimos 10 minutos. Lead ${lead.id} gravado sem avisar o n8n.`)
+      console.warn(`Disjuntor: ${count} leads nos últimos 10 minutos. Lead ${lead.id} gravado sem o e-mail de aviso.`)
       return
     }
   } catch (erro) {
-    console.error('Falha ao contar os envios recentes; avisando o n8n mesmo assim:', erro)
+    console.error('Falha ao contar os envios recentes; enviando o e-mail de aviso mesmo assim:', erro)
   }
-  await notificarN8n(admin, lead)
+  await notificarEquipePorEmail(admin, lead)
 }
 
 declare const EdgeRuntime: { waitUntil(promessa: Promise<unknown>): void } | undefined

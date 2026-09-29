@@ -24,7 +24,7 @@ export const ANEXO_EXTENSOES = ['.pdf', '.dwg']
 
 export class ErroEnvio extends Error {}
 
-/** Envia o lead para a Edge Function `enviar-lead` (grava no banco e notifica via n8n). */
+/** Envia o lead para a Edge Function `enviar-lead` (grava no banco e avisa a equipe por e-mail). */
 export async function enviarLead(lead: NovoLead): Promise<void> {
   if (!supabaseConfigurado) {
     if (import.meta.env.DEV) {

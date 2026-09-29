@@ -10,7 +10,7 @@ Vitrine online da Albano Luz Engenharia, construída a partir do [PRD](./PRD%20-
 | Pré-renderização | Script próprio (`scripts/prerender.mjs`): cada página pública vira HTML estático |
 | Banco, auth e arquivos | Supabase (`obras`, `obra_fotos`, `depoimentos`, `leads`, Storage) — ver [supabase/README.md](./supabase/README.md) |
 | Formulário | Edge Function `enviar-lead` + Cloudflare Turnstile + limites de envio garantidos no banco |
-| Automação | n8n: novo lead → e-mail + WhatsApp ([n8n/novo-lead.json](./n8n/novo-lead.json)) |
+| Aviso de novo lead | E-mail para a equipe, enviado por SMTP direto da função `enviar-lead` (sem serviço intermediário) |
 | Analítica | GA4 + Meta Pixel (só após aceite de cookies), eventos `clique_whatsapp` e `lead_enviado` |
 | Hospedagem | Cloudflare Pages ou VPS com EasyPanel (Dockerfile + nginx) |
 
@@ -23,8 +23,9 @@ npm run dev            # http://localhost:5173
 ```
 
 Com o `.env` apontando para o Supabase, o formulário em `npm run dev` envia leads reais para a função publicada (e a
-equipe é avisada) até o Turnstile ser ativado. Depois disso (passo 7 de [supabase/README.md](./supabase/README.md)),
-a função recusa os envios locais de propósito. Em qualquer caso, deixe `VITE_TURNSTILE_SITE_KEY` vazia no `.env`.
+equipe recebe o aviso por e-mail) até o Turnstile ser ativado. Depois disso (passo 7 de
+[supabase/README.md](./supabase/README.md)), a função recusa os envios locais de propósito. Em qualquer caso, deixe
+`VITE_TURNSTILE_SITE_KEY` vazia no `.env`.
 
 | Script | O que faz |
 | --- | --- |
@@ -47,7 +48,6 @@ src/
   entry-server.tsx      Renderização usada na pré-renderização
 scripts/prerender.mjs   Gera dist/*.html, 404.html, admin.html e sitemap.xml
 supabase/               Migrações, seed, Edge Function e instruções
-n8n/                    Workflow de notificação de leads
 ```
 
 ## Como o conteúdo funciona
@@ -65,7 +65,7 @@ A lista está em `.env.example` (Supabase, Turnstile, GA4 e Meta Pixel).
 
 ## Deploy
 
-Antes do primeiro deploy com o Supabase, siga a ordem de [supabase/README.md](./supabase/README.md): migrações (incluindo a de limites de envio) e seed, cadastro público desligado, função `enviar-lead` publicada com os secrets e workflow do n8n publicado. Com o Supabase configurado, o build lê as obras do banco e **falha se não houver nenhuma obra publicada**. Para gerar mesmo assim, cadastre `PERMITIR_PORTFOLIO_VAZIO=1` no mesmo lugar das variáveis `VITE_*` da hospedagem (num build local, a mensagem de erro do build mostra o comando) e apague essa variável assim que houver obras publicadas.
+Antes do primeiro deploy com o Supabase, siga a ordem de [supabase/README.md](./supabase/README.md): migrações (incluindo a de limites de envio) e seed, cadastro público desligado e função `enviar-lead` publicada com os secrets, incluindo os do aviso por e-mail (SMTP). No projeto atual, migrações, seed e função já estão no ar: falta cadastrar os secrets SMTP e publicar de novo a função (veja a [situação atual](./supabase/README.md#situação-atual)). Com o Supabase configurado, o build lê as obras do banco e **falha se não houver nenhuma obra publicada**. Para gerar mesmo assim, cadastre `PERMITIR_PORTFOLIO_VAZIO=1` no mesmo lugar das variáveis `VITE_*` da hospedagem (num build local, a mensagem de erro do build mostra o comando) e apague essa variável assim que houver obras publicadas.
 
 **Cloudflare Pages**: comando de build `npm run build`, diretório `dist`. Cadastre as variáveis `VITE_*` do `.env.example` nas configurações do projeto (ambiente Production e, se usar, Preview) e, depois de qualquer mudança nelas, faça um novo deploy (**Deployments → Retry deployment** no último deploy de produção). O `public/_headers` já define cache e cabeçalhos de segurança; URLs sem `.html` e o `404.html` funcionam nativamente.
 
@@ -96,7 +96,7 @@ Por isso, **depois de publicar, alterar, despublicar ou excluir obras ou depoime
 - **Cloudflare Pages (upload direto, sem Git):** rode `npm run build` localmente e envie a pasta `dist` de novo.
 - **EasyPanel:** clique em **Deploy** no serviço do site; o build roda de novo e lê as obras do banco. O EasyPanel também mostra, nas configurações do serviço, uma URL de webhook de deploy que pode ser chamada da mesma forma.
 
-Automação opcional: um fluxo no n8n (agendado, ou disparado por um Database Webhook do Supabase na tabela `obras`) que chama o deploy hook. Agrupe as alterações (ex.: no máximo um build por hora) em vez de gerar um build a cada clique no painel.
+O build não é disparado sozinho quando uma obra muda: faça isso à mão, pelo painel da hospedagem ou chamando a URL do deploy hook. Agrupe as alterações (ex.: termine de cadastrar as obras do dia e gere um build só) em vez de gerar um build a cada clique no painel.
 
 ## Pendências de conteúdo (PRD)
 

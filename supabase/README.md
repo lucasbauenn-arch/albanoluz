@@ -8,22 +8,34 @@ supabase/
 ├── migrations/20260929120000_ajustes_storage.sql  bucket "obras" sem listagem pública
 ├── migrations/20260929130000_limites_envio.sql    limites de envio do formulário, garantidos no banco
 ├── seed.sql                                       12 obras ILUSTRATIVAS (mesmo conteúdo de src/data/obras.ts)
-└── functions/enviar-lead/index.ts                 recebe o formulário, grava o lead e avisa o n8n
-n8n/novo-lead.json                                 fluxo n8n: e-mail + WhatsApp da equipe
+└── functions/enviar-lead/index.ts                 recebe o formulário, grava o lead e avisa a equipe por e-mail (SMTP)
 ```
 
 O caminho principal usa só o painel web do Supabase (<https://supabase.com/dashboard>). A CLI aparece como
 alternativa em cada passo. Os nomes de menu podem mudar um pouco entre versões do painel.
 
+## Situação atual
+
+No projeto da Albano Luz já estão no ar as três migrações (inicial, ajustes de storage e limites de envio), o seed
+(passo 2) e a função `enviar-lead` (passo 4). A função publicada ainda é a versão anterior, que avisava a equipe
+pelo n8n. O aviso agora é só por e-mail, enviado pela própria função. Falta:
+
+1. Cadastrar os secrets do e-mail (passo 5).
+2. Publicar de novo a função com o `index.ts` atual do repositório (passo 4 → Deploy) e conferir que a verificação
+   de JWT continua desligada.
+3. Se `N8N_WEBHOOK_URL` ou `N8N_WEBHOOK_SECRET` estiverem nos secrets, apagá-los (no painel, ou
+   `npx supabase secrets unset N8N_WEBHOOK_URL N8N_WEBHOOK_SECRET`): a função não os usa mais. Um fluxo do n8n
+   criado para o site, se existir, pode ser desligado.
+4. Enviar um pedido de teste e conferir a chegada do e-mail (passo 6).
+
 ## Ordem de ativação
 
-1. Migrações e carga inicial (passo 2). Se a inicial, a de ajustes e o seed já foram executados, falta só a
-   migração de limites de envio.
+1. Migrações e carga inicial (passo 2).
 2. **Desligar o cadastro público** e criar o administrador (passo 3).
-3. Publicar a função `enviar-lead` com os secrets (passo 4) e o fluxo do n8n (passo 5).
+3. Configurar o aviso por e-mail (passo 5) e publicar a função `enviar-lead` com os secrets (passo 4).
 4. Só então gerar o build do site com `VITE_SUPABASE_*` e publicar ([README principal → Deploy](../README.md#deploy)).
    O build lê as obras do banco (sem o seed não há portfólio) e o formulário passa a depender da função.
-5. Testar depois do deploy (passo 6).
+5. Testar depois do deploy (passo 6), incluindo a chegada do e-mail.
 6. Turnstile, antes de divulgar o formulário (passo 7): as duas chaves ou nenhuma.
 
 ## 1. Projeto e variáveis do site
@@ -53,11 +65,6 @@ alternativa em cada passo. Os nomes de menu podem mudar um pouco entre versões 
 2. `migrations/20260929120000_ajustes_storage.sql`;
 3. `migrations/20260929130000_limites_envio.sql`;
 4. `seed.sql`.
-
-> **Já executou a inicial, a de ajustes e o seed?** Execute agora só a `20260929130000_limites_envio.sql`, em uma
-> consulta nova, **antes de publicar ou atualizar a função** `enviar-lead` (passo 4). A função usa a coluna
-> `origem_hash` e o trigger que essa migração cria: sem ela, os limites de envio não são garantidos e o log da
-> função mostra erros.
 
 As migrações podem ser executadas de novo sem erro. O seed também, mas só deve rodar uma vez: ele recria, já
 publicadas, as obras ilustrativas que tiverem sido excluídas. A migração inicial recria a política de leitura
@@ -122,9 +129,10 @@ Ainda em **Authentication**:
    - Site URL: `https://albanoluz.com`
    - Redirect URLs: `https://albanoluz.com/admin`, `https://www.albanoluz.com/admin`,
      `http://localhost:5173/admin`
-2. **SMTP Settings:** configure um SMTP próprio (ex.: o mesmo usado pelo n8n). O e-mail padrão do Supabase
-   tem limite baixo e só entrega para membros da organização: sem SMTP próprio o **“Esqueci minha senha”
-   não chega** ao e-mail da equipe.
+2. **SMTP Settings:** configure um SMTP próprio; pode ser o mesmo do aviso de leads (veja
+   [SMTP no login do painel](#smtp-no-login-do-painel-supabase-auth)). O e-mail padrão do Supabase tem limite baixo
+   e só entrega para membros da organização: sem SMTP próprio o **“Esqueci minha senha” não chega** ao e-mail da
+   equipe.
 3. (Opcional) **Email Templates → Reset Password:** traduza o texto para português.
 
 ### Criar o primeiro administrador
@@ -163,8 +171,9 @@ O painel fica em `/admin`. Um usuário que faz login mas não está em `admins` 
 ## 4. Função `enviar-lead`
 
 Recebe o formulário do site (`multipart/form-data`), valida os campos, verifica o Turnstile, aplica os limites de
-envio, salva o anexo no bucket `anexos` (`AAAA/MM/<uuid>-<nome>`), grava o lead com a service role e avisa o
-n8n. Falhas no aviso ao n8n ficam só no log: o lead já está salvo e o visitante recebe sucesso.
+envio, salva o anexo no bucket `anexos` (`AAAA/MM/<uuid>-<nome>`), grava o lead com a service role e envia o
+e-mail de aviso à equipe (passo 5). Falhas no e-mail ficam só no log: o lead já está salvo e o visitante recebe
+sucesso.
 
 Antes de publicar a função, confira que a migração `20260929130000_limites_envio.sql` já foi executada (passo 2).
 
@@ -174,15 +183,16 @@ Antes de publicar a função, confira que a migração `20260929130000_limites_e
 
 | Secret | Obrigatória | Uso |
 | --- | --- | --- |
-| `N8N_WEBHOOK_URL` | sim, para a equipe ser avisada | Production URL do webhook do n8n (passo 5). Sem ela, os leads ficam só no painel |
-| `N8N_WEBHOOK_SECRET` | sim, junto com `N8N_WEBHOOK_URL` | Vai no cabeçalho `x-webhook-secret`; o n8n recusa (403) se não for igual ao **Value** da credencial do nó Webhook (passo 5) |
 | `LIMITE_SAL` | não, mas recomendada | Valor secreto usado para guardar a origem de cada pedido como código (hash), sem gravar o IP do visitante (veja [Limites de envio](#limites-de-envio)). Sem ela, a função usa um valor derivado da configuração do projeto e registra um aviso no log |
 | `TURNSTILE_SECRET_KEY` | **só com a site key publicada** | Secret key do Cloudflare Turnstile. Veja o passo 7 antes de definir |
 | `ALLOWED_ORIGINS` | não | Origens liberadas no CORS, separadas por vírgula. Padrão: `https://albanoluz.com,https://www.albanoluz.com,http://localhost:5173,http://localhost:4173`. **Ao definir, liste todas as origens: a lista substitui o padrão** (veja o passo 6) |
-| `SITE_URL` | não | Base do link do painel enviado nas notificações. Padrão: `https://albanoluz.com` |
+| `SITE_URL` | não | Base do link do painel no e-mail de aviso. Padrão: `https://albanoluz.com` |
 
-**Gere os valores secretos em um terminal.** Cada comando abaixo exibe na tela um valor novo; execute-o uma vez para
-cada secret e copie o valor exibido, sem aspas nem espaços:
+Os secrets do e-mail (`SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM` e `EMAIL_EQUIPE`) estão no
+[passo 5](#5-aviso-por-e-mail-smtp).
+
+**Gere o valor do `LIMITE_SAL` em um terminal.** Cada comando abaixo exibe na tela um valor novo; copie o valor
+exibido, sem aspas nem espaços:
 
 ```bash
 openssl rand -hex 24                                                 # Git Bash, Linux ou macOS
@@ -192,11 +202,8 @@ openssl rand -hex 24                                                 # Git Bash,
 [guid]::NewGuid().ToString('N') + [guid]::NewGuid().ToString('N')    # PowerShell
 ```
 
-- **Segredo do webhook (`N8N_WEBHOOK_SECRET`): guarde antes de usar.** O mesmo valor vai nos dois lados: aqui e no
-  campo **Value** da credencial do nó Webhook no n8n (passo 5). Depois de salvo, nem o painel nem a CLI mostram o
-  valor de novo, então copie-o antes para um gerenciador de senhas.
-- **`LIMITE_SAL`:** use um valor diferente do segredo do webhook. Ele não precisa ser guardado: se um dia for
-  trocado, só a contagem de pedidos por origem dos últimos 10 minutos recomeça do zero.
+O `LIMITE_SAL` não precisa ser guardado: se um dia for trocado, só a contagem de pedidos por origem dos últimos
+10 minutos recomeça do zero.
 
 **Pelo painel:** em **Edge Functions → Secrets**, adicione cada nome e valor e salve. Os secrets valem na hora,
 sem novo deploy da função.
@@ -204,10 +211,11 @@ sem novo deploy da função.
 **Pela CLI** (depois do `login` e do `link` do passo 2; em uma linha, funciona também no PowerShell):
 
 ```bash
-npx supabase secrets set N8N_WEBHOOK_URL=https://n8n.seudominio.com/webhook/albano-luz-novo-lead N8N_WEBHOOK_SECRET=<valor gerado> LIMITE_SAL=<outro valor gerado>
+npx supabase secrets set LIMITE_SAL=<valor gerado>
 ```
 
-Sem o `link`, acrescente `--project-ref <ref-do-projeto>` aos comandos.
+Sem o `link`, acrescente `--project-ref <ref-do-projeto>` aos comandos. Para apagar um secret:
+`npx supabase secrets unset <NOME>`.
 
 ### Deploy
 
@@ -220,9 +228,10 @@ Sem o `link`, acrescente `--project-ref <ref-do-projeto>` aos comandos.
 4. Na página da função, nas configurações, **desligue a verificação de JWT** (opção “Verify JWT with legacy
    secret”; em versões anteriores do painel, “Enforce JWT Verification”) e salve.
 
-Para atualizar, abra a função, cole a versão nova do `index.ts` e faça o deploy de novo. O editor do painel não
-guarda versões: o arquivo do repositório é a referência. **Depois de cada deploy, confira se a verificação de JWT
-continua desligada**: esse ajuste pode voltar a ligar sozinho.
+Para atualizar (é o caso agora, para a versão que envia o e-mail), abra a função, cole a versão nova do
+`index.ts` e faça o deploy de novo. O editor do painel não guarda versões: o arquivo do repositório é a referência.
+**Depois de cada deploy, confira se a verificação de JWT continua desligada**: esse ajuste pode voltar a ligar
+sozinho.
 
 **Pela CLI:**
 
@@ -267,7 +276,7 @@ curl.exe -i -X POST "https://<ref>.supabase.co/functions/v1/enviar-lead" -H "api
 
 Logs: **Edge Functions → enviar-lead → Logs**.
 
-**Webhook de banco não é necessário:** a própria função chama o n8n depois de gravar o lead.
+**Webhook de banco não é necessário:** a própria função envia o e-mail depois de gravar o lead.
 
 ### Limites de envio
 
@@ -285,88 +294,123 @@ O IP do visitante nunca é gravado: a função guarda na coluna `origem_hash` s�
 partir do IP e do `LIMITE_SAL`, que serve apenas para essa contagem. Se o anexo já tiver sido enviado quando o
 banco recusar o pedido, a função apaga o arquivo.
 
-**Disjuntor das notificações:** se chegarem mais de 30 pedidos no total em 10 minutos, eles continuam sendo gravados
-normalmente, mas a função deixa de avisar o n8n (e-mail e WhatsApp da equipe) enquanto o volume estiver alto, e
-registra no log uma linha que começa com `Disjuntor`. Nenhum pedido legítimo é recusado pelo volume total: nesses
-momentos, confira os pedidos direto no painel (`/admin` → Leads).
+**Disjuntor dos avisos:** se chegarem mais de 30 pedidos no total em 10 minutos, eles continuam sendo gravados
+normalmente, mas a função deixa de enviar o e-mail de aviso à equipe enquanto o volume estiver alto, e registra no
+log uma linha com a palavra `Disjuntor`. Nenhum pedido legítimo é recusado pelo volume total: nesses momentos,
+confira os pedidos direto no painel (`/admin` → Leads).
 
 Os limites reduzem o estrago de um robô, mas não impedem pedidos falsos. **A proteção principal recomendada
 continua sendo o Turnstile (passo 7).**
 
-## 5. n8n (e-mail + WhatsApp da equipe)
+## 5. Aviso por e-mail (SMTP)
 
-O segredo do webhook e a apikey da Evolution API ficam em **credenciais** do n8n, que ele guarda criptografadas.
-Não é preciso criar variáveis de ambiente no n8n nem reiniciá-lo.
+A cada lead gravado, a própria função `enviar-lead` envia um e-mail de aviso para a equipe, conectando-se direto ao
+servidor SMTP de uma conta de e-mail. Não há serviço intermediário nem aviso automático por WhatsApp.
 
-1. **Importar:** no n8n, crie um workflow novo, em branco. No menu **⋯** do canto superior direito do editor,
-   escolha a opção de importar de arquivo (**Import → From file**; em versões anteriores, **Import from File...**) e
-   selecione `n8n/novo-lead.json`. Até você escolher as credenciais (itens 2 a 4), os nós que usam credencial
-   aparecem com um aviso: é normal.
-2. **Credencial do webhook:** abra o nó **Webhook novo lead**. O campo **Authentication** já vem como **Header Auth**.
-   No campo da credencial, escolha **Create new credential** e preencha:
-   - **Name:** `x-webhook-secret`
-   - **Value:** o mesmo valor gerado para `N8N_WEBHOOK_SECRET` (passo 4), sem aspas nem espaços.
+- Sem `SMTP_HOST`, `SMTP_USER` e `SMTP_PASS`, o aviso é pulado (com uma mensagem no log) e o lead continua sendo
+  gravado e aparece no painel.
+- Uma falha no envio também fica só no log: o visitante recebe sucesso e o lead está no painel.
 
-   Salve a credencial. Para reconhecê-la depois, dê a ela um nome como `Albano Luz — segredo do webhook`. Com essa
-   credencial, o n8n recusa com `403` qualquer chamada que não traga esse cabeçalho com esse valor.
-3. **WhatsApp:** abra o nó **WhatsApp da equipe (Evolution API)**.
-   - No campo da credencial (também do tipo Header Auth), escolha **Create new credential** com **Name** `apikey` e
-     **Value** a apikey da instância da Evolution API. Nome sugerido: `Evolution API — apikey`.
-   - No campo **URL**, troque `https://PREENCHA-A-URL-DA-EVOLUTION.invalid` pelo endereço da sua Evolution API e
-     `PREENCHA-A-INSTANCIA` pelo nome da instância. Exemplo do resultado:
-     `https://evolution.seudominio.com/message/sendText/albano`. Endereço e instância não são segredos e ficam
-     escritos no nó; a apikey fica só na credencial.
-   - O nó usa o formato da Evolution API v2 (`POST /message/sendText/{instância}` com
-     `{ "number": "5511932742355", "text": "..." }`). Na v1 o corpo é
-     `{ "number": "...", "textMessage": { "text": "..." } }`.
-4. **E-mail:** no nó **Enviar e-mail**, selecione (ou crie) a credencial SMTP. Para Gmail, use `smtp.gmail.com`,
-   porta 465 (SSL) e uma **senha de app** da conta.
-5. **Confira as credenciais:** as duas credenciais Header Auth são do mesmo tipo, e o n8n pode sugerir a mesma
-   nos dois nós. O nó **Webhook novo lead** precisa ficar com a de `x-webhook-secret`, e o nó **WhatsApp da equipe**,
-   com a de `apikey`.
-6. **Publicar:** no n8n 2.x, clique em **Publish**; no 1.x, salve o workflow e ligue a chave **Active**. Sem isso, o
-   endereço de produção não responde. Depois copie a **Production URL** do nó Webhook para o secret
-   `N8N_WEBHOOK_URL` da função (passo 4).
+> **Use a porta 465 (SSL).** As Edge Functions do Supabase não podem abrir conexões nas portas 25 e 587: com elas, o
+> envio sempre falha. Na porta 465 a função se conecta com SSL/TLS desde o início (TLS implícito). Em qualquer outra
+> porta liberada (ex.: 2525, oferecida por serviços como Brevo, Mailgun e SendGrid) ela exige STARTTLS. SSL implícito
+> em portas diferentes da 465 (ex.: 2465, 8465) não é suportado.
 
-> **Já tinha configurado uma versão anterior deste fluxo?** Ela lia o segredo e a apikey de variáveis de ambiente
-> do n8n. Despublique ou apague o workflow antigo antes de publicar o novo, porque os dois usam o mesmo endereço de
-> webhook. Depois, remova do n8n as variáveis `ALBANO_WEBHOOK_SECRET`, `EVOLUTION_URL`, `EVOLUTION_INSTANCE` e
-> `EVOLUTION_APIKEY`. Quanto a `N8N_BLOCK_ENV_ACCESS_IN_NODE` (que, em `false`, deixa qualquer workflow da
-> instância ler as variáveis do servidor): no n8n 2.x basta apagar a linha, porque o padrão já bloqueia; no 1.x o
-> padrão é liberar, então troque para `N8N_BLOCK_ENV_ACCESS_IN_NODE=true` (antes, confira se nenhum outro
-> workflow da instância usa `$env`). Reinicie o n8n para a mudança valer.
+### Secrets do e-mail
 
-Se o lead aparece no painel mas a equipe não é avisada, veja os logs da função (**Edge Functions → enviar-lead →
-Logs**):
+| Secret | Obrigatória | Uso |
+| --- | --- | --- |
+| `SMTP_HOST` | sim, para o e-mail sair | Servidor de saída (SMTP) do provedor, ex.: `smtp.gmail.com` |
+| `SMTP_PORT` | não | Deixe sem definir: `465`, com SSL. Qualquer outra porta é usada com STARTTLS (ex.: `2525`); 25 e 587 são bloqueadas pelo Supabase |
+| `SMTP_USER` | sim | Usuário do SMTP: em geral, o endereço de e-mail completo |
+| `SMTP_PASS` | sim | Senha do SMTP (no Gmail, a senha de app) |
+| `SMTP_FROM` | não | Remetente. Padrão: o `SMTP_USER`. Aceita `Nome <email>`, ex.: `Site Albano Luz <admin@albanoluz.com>`. Use o endereço da própria conta do `SMTP_USER` (ou um alias autorizado nela) |
+| `EMAIL_EQUIPE` | não | Quem recebe o aviso, separados por vírgula. Padrão: `albano.luzengenharia@gmail.com` |
 
-- `n8n respondeu 403`: o segredo não confere. O **Value** da credencial do nó Webhook precisa ser igual ao
-  `N8N_WEBHOOK_SECRET`, e o **Name**, `x-webhook-secret`.
-- `n8n respondeu 404`: o workflow não está publicado, ou a `N8N_WEBHOOK_URL` não é a Production URL.
-- outro erro, ou nenhum erro na função: no n8n, abra **Executions** e veja em qual nó a execução falhou. Se o
-  e-mail chega mas o WhatsApp não, confira a URL e a credencial do nó **WhatsApp da equipe**.
-- linha que começa com `Disjuntor`: muitos pedidos em pouco tempo (veja [Limites de envio](#limites-de-envio)). O
-  aviso foi pulado de propósito; os pedidos estão no painel.
+**Pelo painel:** em **Edge Functions → Secrets** (o mesmo lugar do passo 4), adicione cada nome e valor e salve.
+Valem na hora, sem novo deploy da função.
 
-O n8n recebe:
+**Pela CLI** (uma linha; funciona também no PowerShell; troque os valores):
 
-```json
-{
-  "evento": "lead_enviado",
-  "lead": { "id": "...", "created_at": "...", "nome": "...", "telefone": "...", "email": "...", "empresa": "...",
-            "perfil": "arquiteto", "servicos": ["estrutural"], "cidade": "...", "area_m2": 250,
-            "mensagem": "...", "anexo_path": "2026/09/<uuid>-planta.pdf", "origem": "/contato",
-            "consentimento": true, "status": "novo" },
-  "perfil_label": "Arquiteto(a)",
-  "servicos_labels": ["Projeto Estrutural"],
-  "anexo_url": "https://...assinada, válida por 7 dias... ou null",
-  "whatsapp_url": "https://wa.me/5511912345678",
-  "painel_url": "https://albanoluz.com/admin?aba=leads&lead=<id>"
-}
+```bash
+npx supabase secrets set SMTP_HOST=smtp.gmail.com SMTP_USER=conta.de.envio@gmail.com "SMTP_FROM=Site Albano Luz <conta.de.envio@gmail.com>" EMAIL_EQUIPE=albano.luzengenharia@gmail.com
 ```
+
+Cadastre o `SMTP_PASS` pelo painel: na linha de comando, a senha fica no histórico do terminal, e símbolos como `$`
+ou `&` podem ser interpretados pelo PowerShell ou pelo Bash.
+
+### Receita: Gmail
+
+1. Na conta Google que vai **enviar**, ative a **verificação em duas etapas** (Conta Google → **Segurança**). Sem
+   ela, a opção de senha de app não aparece.
+2. Crie uma **senha de app** (Conta Google → **Segurança** → **Verificação em duas etapas** → **Senhas de app**, no
+   fim da página, ou direto em <https://myaccount.google.com/apppasswords>) com um nome como `Site Albano Luz`. Copie
+   os 16 caracteres, sem os espaços. A senha normal da conta não funciona no SMTP. Se a página disser que a opção não
+   está disponível, a verificação em duas etapas ainda não está ativa (ou, no Google Workspace, o administrador
+   bloqueou senhas de app).
+3. Secrets: `SMTP_HOST` = `smtp.gmail.com`; `SMTP_USER` = o endereço Gmail completo; `SMTP_PASS` = a senha de app;
+   `SMTP_PORT` pode ficar sem definir (465). Se usar `SMTP_FROM`, mantenha o mesmo endereço
+   (`Site Albano Luz <conta.de.envio@gmail.com>`): o Gmail troca o remetente pelo da conta quando ele é outro.
+
+- **Limite diário:** o Gmail limita os envios por conta (numa conta gratuita, na casa de 500 destinatários por dia;
+  cada endereço de `EMAIL_EQUIPE` conta). Para o volume do site sobra; se o limite estourar, o Gmail recusa envios
+  por até 24 horas e os leads continuam no painel.
+- **Prefira uma conta só para envio.** Se a conta que envia for a mesma que recebe (ex.:
+  `albano.luzengenharia@gmail.com` enviando para ela mesma), o Gmail pode guardar o aviso só em **Enviados**, sem
+  ele aparecer na caixa de entrada. Uma conta Gmail separada para os avisos (ou o e-mail de domínio) evita isso e
+  mantém a senha de app longe da conta principal.
+- Trocar a senha da conta Google revoga as senhas de app: crie outra e atualize o `SMTP_PASS`.
+
+No Google Workspace (e-mail de domínio hospedado no Google), a receita é a mesma.
+
+### Receita: e-mail de domínio (ex.: `admin@albanoluz.com`)
+
+Use o SMTP do provedor que hospeda o e-mail do domínio (Hostinger, Zoho, Locaweb etc.). No painel do provedor,
+procure os dados de SMTP (ou de configuração de um programa de e-mail) e confira:
+
+- `SMTP_HOST`: o servidor de saída indicado pelo provedor (na Hostinger, por exemplo, `smtp.hostinger.com`);
+- a porta **465 com SSL**. Se o provedor só oferecer 587 ou 25, ele não funciona com a função (portas bloqueadas pelo
+  Supabase): use uma porta alternativa com STARTTLS, se o provedor tiver (ex.: 2525), outro provedor ou o Gmail;
+- `SMTP_USER`: o endereço completo (`admin@albanoluz.com`); `SMTP_PASS`: a senha dessa caixa, ou uma senha de app,
+  se o provedor exigir (alguns exigem quando a verificação em duas etapas está ativa).
+
+Para o aviso não cair no spam, confira com o provedor se os registros SPF e DKIM do domínio estão no DNS.
+
+### SMTP no login do painel (Supabase Auth)
+
+Os e-mails de “Esqueci minha senha” do painel `/admin` saem pelo Supabase Auth, que tem uma configuração de SMTP
+própria, separada dos secrets da função (passo 3). Em **Authentication**, nas configurações de SMTP (**SMTP
+Settings**; o lugar exato muda entre versões do painel), ative o SMTP próprio e use os mesmos dados: host, porta
+465, usuário, senha e, como remetente, o mesmo endereço do `SMTP_FROM` (ou do `SMTP_USER`). Esses e-mails contam
+no mesmo limite diário da conta.
+
+### Se o e-mail não chegar
+
+Se o lead aparece no painel, mas o e-mail não chega:
+
+1. Procure na pasta **Spam** de cada endereço de `EMAIL_EQUIPE` (no Gmail, também em **Todos os e-mails**). Se
+   estiver lá, marque como “Não é spam”.
+2. Abra os logs da função (**Edge Functions → enviar-lead → Logs**) e procure por `SMTP` (todas as linhas do aviso
+   por e-mail têm essa palavra):
+   - `SMTP: aviso do lead … enviado por e-mail para N destinatário(s)`: o servidor **aceitou** o e-mail. Procure em
+     Spam, **Todos os e-mails** e, se a conta que envia for a mesma que recebe, em **Enviados**;
+   - `Aviso por e-mail desligado (secrets ausentes: …)`: falta `SMTP_HOST`, `SMTP_USER` ou `SMTP_PASS` (confira os
+     nomes, em maiúsculas);
+   - `SMTP: falha … [EAUTH …] Invalid login: 535`: usuário ou senha errados. No Gmail, o `SMTP_PASS` é a senha de
+     app, sem espaços, e não a senha da conta;
+   - `SMTP: falha … [ETIMEDOUT …]`, `[ESOCKET …] ECONNREFUSED` ou `ENOTFOUND`: `SMTP_HOST` ou `SMTP_PORT` errados, ou
+     uma porta bloqueada (25 ou 587). Use a porta 465 com SSL;
+   - `SMTP: o servidor recusou destinatário(s)` ou `[EENVELOPE …]`: endereço de `EMAIL_EQUIPE` recusado, ou remetente
+     recusado porque o `SMTP_FROM` não é da conta do `SMTP_USER`;
+   - outra falha `SMTP: falha …`: leia a mensagem do servidor (ex.: limite diário atingido).
+3. Linha com a palavra `Disjuntor`: muitos pedidos em pouco tempo (veja [Limites de envio](#limites-de-envio)). O
+   aviso foi pulado de propósito; os pedidos estão no painel.
+4. Nenhuma linha com `SMTP` para o lead nem `Disjuntor`: a função no ar é uma versão antiga, que não envia e-mail.
+   Publique de novo a função com o `index.ts` do repositório (passo 4).
 
 ## 6. Teste depois do deploy
 
-Com o site publicado, a função no ar e o workflow do n8n publicado.
+Com o site publicado e a função no ar, com os secrets do e-mail (passo 5).
 
 > **Site ainda em endereço provisório?** No primeiro deploy, o site costuma abrir em um endereço provisório (ex.:
 > `https://<projeto>.pages.dev` ou o domínio padrão do EasyPanel). A função só aceita pedidos de `albanoluz.com`,
@@ -392,8 +436,9 @@ Com o site publicado, a função no ar e o workflow do n8n publicado.
    ```
 
 2. No site publicado, envie um pedido pelo formulário de orçamento com esse anexo.
-3. Confira: mensagem de sucesso no site; o lead em `/admin` → Leads, com o anexo baixando; e-mail e WhatsApp da
-   equipe, com o botão “Baixar anexo” funcionando.
+3. Confira: mensagem de sucesso no site; o lead em `/admin` → Leads, com o anexo baixando; e o e-mail de aviso em
+   cada endereço de `EMAIL_EQUIPE`, com o link do anexo funcionando. Se ele não estiver na caixa de entrada,
+   procure na pasta **Spam**; se não chegar, veja [Se o e-mail não chegar](#se-o-e-mail-não-chegar).
 4. **Confira se a função identifica a conexão do visitante** (é o que faz valer o limite por conexão). Envie mais
    um pedido de outra conexão, por exemplo o 4G do celular com o Wi-Fi desligado e outro telefone, e rode no
    SQL Editor:
