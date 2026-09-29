@@ -220,15 +220,12 @@ async function validarAnexo(valor: FormDataEntryValue | null) {
 }
 
 // IP do cliente. O Supabase fica atrás do Cloudflare, que sobrescreve
-// cf-connecting-ip; x-real-ip e o ÚLTIMO item de x-forwarded-for (o que o proxy
-// acrescentou) ficam de reserva. O primeiro item de x-forwarded-for vem do
-// próprio cliente e pode ser forjado.
+// cf-connecting-ip (conferido em produção em 29/09/2026: chega com o IP real do
+// visitante). x-forwarded-for NÃO é usado: o último item é o IP do gateway da
+// AWS, e usá-lo faria todos os visitantes dividirem o mesmo limite. Sem IP
+// confiável, origem_hash fica nulo e o limite por origem não se aplica.
 function ipDoCliente(req: Request): string | null {
-  const candidatos = [
-    req.headers.get('cf-connecting-ip'),
-    req.headers.get('x-real-ip'),
-    req.headers.get('x-forwarded-for')?.split(',').at(-1),
-  ]
+  const candidatos = [req.headers.get('cf-connecting-ip'), req.headers.get('x-real-ip')]
   for (const candidato of candidatos) {
     const ip = candidato?.trim().toLowerCase() ?? ''
     if (ip.length <= 45 && /^[0-9a-f:.]*[.:][0-9a-f:.]*$/.test(ip)) return ip
