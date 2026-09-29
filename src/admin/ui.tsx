@@ -405,6 +405,10 @@ export function Miniatura({
 // Diálogo (elemento <dialog> nativo: foco preso, Esc fecha, fundo inerte)
 // -----------------------------------------------------------------------------
 
+/**
+ * Quem fecha é sempre o pai (aberto = false). Esc, o X e o clique no fundo só
+ * chamam onFechar, que pode pedir confirmação e manter o diálogo aberto.
+ */
 export function Dialogo({
   aberto,
   onFechar,
@@ -428,19 +432,36 @@ export function Dialogo({
 }) {
   const ref = useRef<HTMLDialogElement>(null)
   const idTitulo = useId()
+  // Incrementado quando o navegador fecha o diálogo por conta própria: faz o
+  // efeito abaixo rodar de novo e reabrir se o pai ainda quiser aberto.
+  const [reabrir, setReabrir] = useState(0)
 
   useEffect(() => {
     const dialogo = ref.current
     if (!dialogo) return
     if (aberto && !dialogo.open) dialogo.showModal()
     if (!aberto && dialogo.open) dialogo.close()
-  }, [aberto])
+  }, [aberto, reabrir])
 
   return (
     <dialog
       ref={ref}
       aria-labelledby={idTitulo}
-      onClose={onFechar}
+      onCancel={(e) => {
+        // Esc: impede o fechamento nativo e deixa o pai decidir.
+        if (e.cancelable) {
+          e.preventDefault()
+          onFechar()
+        }
+        // Não cancelável (Esc repetido sem interação do usuário): o navegador
+        // fecha mesmo assim, e o onClose abaixo trata.
+      }}
+      onClose={(e) => {
+        // Fechado pelo efeito (aberto = false) ou já reaberto: nada a fazer.
+        if (!aberto || e.currentTarget.open) return
+        onFechar()
+        setReabrir((n) => n + 1)
+      }}
       onClick={(e) => {
         if (fecharNoFundo && e.target === e.currentTarget) onFechar()
       }}

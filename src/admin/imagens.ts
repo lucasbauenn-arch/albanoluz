@@ -9,7 +9,17 @@ const LADO_MAXIMO = 1920
 const QUALIDADE_WEBP = 0.82
 const QUALIDADE_JPEG = 0.85
 
+/**
+ * Variante reduzida gravada ao lado de cada upload: `<uuid>-600.<ext>`, com a
+ * mesma extensão do arquivo principal. O site monta o srcset trocando só o
+ * sufixo na URL (src/data/fotos.ts, srcSetDe).
+ */
+const LARGURA_REDUZIDA = 600
+const SUFIXO_REDUZIDA = `-${LARGURA_REDUZIDA}`
+const QUALIDADE_REDUZIDA = 0.8
+
 type ImagemPreparada = { blob: Blob; extensao: string; tipo: string }
+type ImagensPreparadas = { principal: ImagemPreparada; reduzida: ImagemPreparada }
 
 async function codificar(
   bitmap: ImageBitmap,
@@ -61,12 +71,22 @@ function extensaoOriginal(arquivo: File): string {
   return porTipo[arquivo.type] ?? arquivo.name.split('.').pop()?.toLowerCase() ?? 'img'
 }
 
+/** Dimensões com a escala aplicada (nunca amplia; mínimo de 1 px). */
+function escalar(bitmap: ImageBitmap, escala: number) {
+  const fator = Math.min(1, escala)
+  return {
+    largura: Math.max(1, Math.round(bitmap.width * fator)),
+    altura: Math.max(1, Math.round(bitmap.height * fator)),
+  }
+}
+
 /**
- * Redimensiona (lado maior ≤ `ladoMaximo`) e converte para WebP no navegador.
- * Sem codificador WebP (ex.: Safari), gera JPEG redimensionado; se nem isso
- * for possível, devolve o arquivo original.
+ * Gera, no navegador, a imagem principal (lado maior ≤ `ladoMaximo`) e a
+ * variante de 600 px de largura, as duas em WebP. Sem codificador WebP (ex.:
+ * Safari), as duas saem em JPEG; se nem isso for possível, o arquivo original
+ * ocupa as duas posições (o par de arquivos existe sempre).
  */
-export async function prepararImagem(arquivo: File, ladoMaximo = LADO_MAXIMO): Promise<ImagemPreparada> {
+export async function prepararImagens(arquivo: File, ladoMaximo = LADO_MAXIMO): Promise<ImagensPreparadas> {
   if (!arquivo.type.startsWith('image/')) {
     throw new ErroPainel('Selecione um arquivo de imagem (JPG, PNG ou WebP).')
   }
@@ -79,40 +99,66 @@ export async function prepararImagem(arquivo: File, ladoMaximo = LADO_MAXIMO): P
   }
 
   try {
-    const escala = Math.min(1, ladoMaximo / Math.max(bitmap.width, bitmap.height))
-    const largura = Math.max(1, Math.round(bitmap.width * escala))
-    const altura = Math.max(1, Math.round(bitmap.height * escala))
+    const principal = escalar(bitmap, ladoMaximo / Math.max(bitmap.width, bitmap.height))
+    const reduzida = escalar(bitmap, LARGURA_REDUZIDA / bitmap.width)
 
-    const webp = await codificar(bitmap, largura, altura, 'image/webp', QUALIDADE_WEBP, false)
-    if (webp && webp.type === 'image/webp') return { blob: webp, extensao: 'webp', tipo: 'image/webp' }
-
-    const jpeg = await codificar(bitmap, largura, altura, 'image/jpeg', QUALIDADE_JPEG, true)
-    if (jpeg && jpeg.type === 'image/jpeg') return { blob: jpeg, extensao: 'jpg', tipo: 'image/jpeg' }
+    // As duas no mesmo formato: se a reduzida falhar em WebP, tenta o par em JPEG.
+    const formatos = [
+      { tipo: 'image/webp', extensao: 'webp', qualidade: QUALIDADE_WEBP, fundoBranco: false },
+      { tipo: 'image/jpeg', extensao: 'jpg', qualidade: QUALIDADE_JPEG, fundoBranco: true },
+    ]
+    for (const { tipo, extensao, qualidade, fundoBranco } of formatos) {
+      const grande = await codificar(bitmap, principal.largura, principal.altura, tipo, qualidade, fundoBranco)
+      if (grande?.type !== tipo) continue
+      const pequena = await codificar(bitmap, reduzida.largura, reduzida.altura, tipo, QUALIDADE_REDUZIDA, fundoBranco)
+      if (pequena?.type !== tipo) continue
+      return { principal: { blob: grande, extensao, tipo }, reduzida: { blob: pequena, extensao, tipo } }
+    }
   } catch {
     // Cai para o arquivo original abaixo.
   } finally {
     bitmap.close()
   }
 
-  return { blob: arquivo, extensao: extensaoOriginal(arquivo), tipo: arquivo.type }
+  const original = { blob: arquivo, extensao: extensaoOriginal(arquivo), tipo: arquivo.type }
+  return { principal: original, reduzida: original }
 }
 
 /**
- * Otimiza e envia uma imagem ao bucket público "obras" em `<pasta>/<uuid>.webp`.
- * Devolve a URL pública completa.
+ * Otimiza e envia uma imagem ao bucket público "obras": `<pasta>/<uuid>.webp`
+ * e a variante `<pasta>/<uuid>-600.webp` (ou o par em .jpg). Se um dos dois
+ * envios falhar, apaga o outro e lança o erro. Devolve a URL pública do
+ * arquivo principal, que é a gravada no banco.
  */
 export async function enviarImagem(pasta: string, arquivo: File, ladoMaximo?: number): Promise<string> {
-  const { blob, extensao, tipo } = await prepararImagem(arquivo, ladoMaximo)
+  const { principal, reduzida } = await prepararImagens(arquivo, ladoMaximo)
   const pastaLimpa = pasta.replace(/[^a-z0-9_-]/gi, '') || 'sem-pasta'
-  const caminho = `${pastaLimpa}/${crypto.randomUUID()}.${extensao}`
+  const base = `${pastaLimpa}/${crypto.randomUUID()}`
+  const envios = [
+    { caminho: `${base}.${principal.extensao}`, imagem: principal },
+    { caminho: `${base}${SUFIXO_REDUZIDA}.${reduzida.extensao}`, imagem: reduzida },
+  ]
   const storage = sb().storage.from(BUCKET_OBRAS)
-  const { error } = await storage.upload(caminho, blob, {
-    contentType: tipo,
-    cacheControl: '31536000',
-    upsert: false,
-  })
-  if (error) throw error
-  return storage.getPublicUrl(caminho).data.publicUrl
+  const resultados = await Promise.allSettled(
+    envios.map(({ caminho, imagem }) =>
+      storage.upload(caminho, imagem.blob, { contentType: imagem.tipo, cacheControl: '31536000', upsert: false }),
+    ),
+  )
+  const falhas = resultados.map((r) => (r.status === 'rejected' ? (r.reason as unknown) : r.value.error))
+  const falha = falhas.find(Boolean)
+  if (falha) {
+    // Não deixa um arquivo sem o par no bucket.
+    const enviados = envios.filter((_, i) => !falhas[i]).map((e) => e.caminho)
+    if (enviados.length) {
+      try {
+        await storage.remove(enviados)
+      } catch {
+        // Melhor esforço: o erro que importa é o do envio.
+      }
+    }
+    throw falha
+  }
+  return storage.getPublicUrl(envios[0].caminho).data.publicUrl
 }
 
 const PREFIXO_PUBLICO = `${SUPABASE_URL}/storage/v1/object/public/${BUCKET_OBRAS}/`
@@ -128,9 +174,27 @@ export function caminhoNoBucketObras(url: string | null | undefined): string | n
   }
 }
 
-/** Remove do storage as imagens do bucket "obras" (melhor esforço; não lança). */
+const NOME_DO_PAINEL = /^(.*\/)?([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.([a-z0-9]+)$/i
+
+/**
+ * `<pasta>/<uuid>.<ext>` → `<pasta>/<uuid>-600.<ext>`. Só para nomes gerados
+ * pelo painel (uuid), para nunca apagar um arquivo alheio que termine em -600.
+ */
+function caminhoDaReduzida(caminho: string): string | null {
+  const m = caminho.match(NOME_DO_PAINEL)
+  return m ? `${m[1] ?? ''}${m[2]}${SUFIXO_REDUZIDA}.${m[3]}` : null
+}
+
+/**
+ * Remove do storage as imagens do bucket "obras" e as variantes -600 (melhor
+ * esforço; não lança). URLs locais do site (/fotos/..., /ilustracoes/...) são
+ * ignoradas. Variante que não existe (upload antigo) não gera erro.
+ */
 export async function removerImagens(urls: (string | null | undefined)[]): Promise<void> {
-  const caminhos = [...new Set(urls.map(caminhoNoBucketObras).filter((c): c is string => Boolean(c)))]
+  const principais = urls.map(caminhoNoBucketObras).filter((c): c is string => Boolean(c))
+  const caminhos = [
+    ...new Set(principais.flatMap((c) => [c, caminhoDaReduzida(c)]).filter((c): c is string => Boolean(c))),
+  ]
   if (!caminhos.length) return
   try {
     const { error } = await sb().storage.from(BUCKET_OBRAS).remove(caminhos)

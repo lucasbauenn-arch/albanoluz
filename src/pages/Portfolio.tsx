@@ -1,9 +1,10 @@
-import { Info } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router'
+import { AvisoIlustrativas } from '../components/AvisoIlustrativas'
 import { CtaOrcamento } from '../components/CtaOrcamento'
 import { ObraCard } from '../components/ObraCard'
 import { CabecalhoPagina } from '../components/ui/CabecalhoPagina'
+import { ehIlustrativa } from '../data/fotos'
 import { iluUrl } from '../data/ilustracoes'
 import { useConteudo } from '../lib/conteudo-dinamico'
 import { Seo, schemaBreadcrumb } from '../lib/head'
@@ -27,7 +28,7 @@ const trilha = [
 const ehFiltro = (v: string | null): v is Filtro => FILTROS.some((f) => f.id === v)
 
 export default function Portfolio() {
-  const { obras, fonte } = useConteudo()
+  const { obras } = useConteudo()
   const navigate = useNavigate()
   const [filtro, setFiltro] = useState<Filtro>('todas')
 
@@ -88,12 +89,8 @@ export default function Portfolio() {
           {visiveis.length === 1 ? '1 obra encontrada' : `${visiveis.length} obras encontradas`}
         </p>
 
-        {fonte === 'local' && (
-          <p className="mt-4 flex items-start gap-2 border-l-2 border-marinho-400 bg-white/70 px-4 py-3 text-sm text-grafite">
-            <Info aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-marinho" />
-            Obras e imagens ilustrativas. As fotos e os dados reais de cada obra serão publicados em breve.
-          </p>
-        )}
+        {/* Pelo conteúdo, não pela fonte: o seed publica no Supabase as mesmas obras ilustrativas. */}
+        {visiveis.some(ehIlustrativa) && <AvisoIlustrativas className="mt-4" />}
 
         {visiveis.length > 0 ? (
           <div className="mt-8 grid gap-6 sm:grid-cols-2 lg:grid-cols-3">

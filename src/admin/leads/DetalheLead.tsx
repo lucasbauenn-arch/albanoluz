@@ -4,8 +4,9 @@ import { PERFIL_LABEL, type StatusLead } from '../../types'
 import { classeBotao } from '../estilos'
 import type { LeadAdmin } from '../mapeamento'
 import { BUCKET_ANEXOS, sb } from '../supabase'
-import { Aviso, Botao, CampoAreaTexto, Dialogo } from '../ui'
+import { Aviso, Botao, CampoAreaTexto, Carregando, Dialogo } from '../ui'
 import {
+  ErroPainel,
   formatarArea,
   formatarDataHora,
   garantirAfetado,
@@ -30,6 +31,8 @@ function Dado({ rotulo, children }: { rotulo: string; children: ReactNode }) {
 export default function DetalheLead({
   aberto,
   lead,
+  buscando = false,
+  erroBusca = null,
   onFechar,
   onAlterado,
   onExcluido,
@@ -38,6 +41,10 @@ export default function DetalheLead({
 }: {
   aberto: boolean
   lead: LeadAdmin | null
+  /** Lead fora da lista carregada sendo buscado pelo id (link direto). */
+  buscando?: boolean
+  /** Falha ao buscar o lead pelo id. */
+  erroBusca?: string | null
   onFechar: () => void
   onAlterado: (mudancas: Partial<LeadAdmin>) => void
   onExcluido: (lead: LeadAdmin) => void
@@ -52,16 +59,32 @@ export default function DetalheLead({
 
   if (!lead) {
     return (
-      <Dialogo aberto={aberto} onFechar={onFechar} titulo="Lead não encontrado" lateral>
-        <Aviso tipo="alerta">
-          Este lead não está na lista. Ele pode ter sido excluído, ou o link está incorreto.
-        </Aviso>
+      <Dialogo
+        aberto={aberto}
+        onFechar={onFechar}
+        titulo={buscando ? 'Carregando lead…' : erroBusca ? 'Não foi possível abrir o lead' : 'Lead não encontrado'}
+        lateral
+      >
+        {buscando ? (
+          <Carregando texto="Buscando o lead…" />
+        ) : erroBusca ? (
+          <Aviso tipo="erro">{erroBusca}</Aviso>
+        ) : (
+          <Aviso tipo="alerta">Este lead não foi encontrado. Ele pode ter sido excluído, ou o link está incorreto.</Aviso>
+        )}
       </Dialogo>
     )
   }
 
   const atual = lead
   const obsAlteradas = (ouNulo(observacoes) ?? '') !== (atual.observacoes ?? '')
+
+  // Esc, clique no fundo e o X passam por aqui (o Dialogo não fecha sozinho).
+  function fechar() {
+    if (obsAlteradas && !window.confirm('Descartar as observações internas não salvas?')) return
+    onFechar()
+  }
+
   const telefone = numeroWhatsApp(atual.telefone)
   const primeiroNome = atual.nome.split(/\s+/)[0]
   const whatsapp = linkWhatsApp(
@@ -115,17 +138,40 @@ export default function DetalheLead({
     if (!confirmado) return
     setExcluindo(true)
     setMensagem(null)
+    // O anexo (dado pessoal, LGPD) sai ANTES da linha: se a remoção falhar, o
+    // lead continua no painel com o caminho do arquivo, e dá para tentar de novo.
+    // Remover um arquivo que já não existe não gera erro.
+    let anexoRemovido = false
     try {
+      if (atual.anexoPath) {
+        const anexos = sb().storage.from(BUCKET_ANEXOS)
+        const { data: removidos, error: erroAnexo } = await anexos.remove([atual.anexoPath])
+        if (erroAnexo) {
+          throw new ErroPainel(
+            `${mensagemErro(erroAnexo, 'Não foi possível apagar o anexo.')} O lead não foi excluído; tente de novo.`,
+          )
+        }
+        // Lista vazia: o arquivo já não existia ou o RLS barrou (sem erro). Confere.
+        if (!removidos?.length) {
+          const { data: existe } = await anexos.exists(atual.anexoPath)
+          if (existe) {
+            throw new ErroPainel(
+              'O anexo não pôde ser apagado (confirme se seu usuário é administrador). O lead não foi excluído.',
+            )
+          }
+        }
+        anexoRemovido = true
+      }
       const { data, error } = await sb().from('leads').delete().eq('id', atual.id).select('id')
       if (error) throw error
       garantirAfetado(data)
-      if (atual.anexoPath) {
-        const { error: erroAnexo } = await sb().storage.from(BUCKET_ANEXOS).remove([atual.anexoPath])
-        if (erroAnexo) console.warn('Lead excluído, mas o anexo não foi removido:', erroAnexo.message)
-      }
       onExcluido(atual)
     } catch (erro) {
-      setMensagem({ tipo: 'erro', texto: mensagemErro(erro, 'Não foi possível excluir o lead.') })
+      const texto = mensagemErro(erro, 'Não foi possível excluir o lead.')
+      setMensagem({
+        tipo: 'erro',
+        texto: anexoRemovido ? `O anexo foi apagado, mas o lead não foi excluído. ${texto}` : texto,
+      })
       setExcluindo(false)
     }
   }
@@ -133,7 +179,7 @@ export default function DetalheLead({
   return (
     <Dialogo
       aberto={aberto}
-      onFechar={onFechar}
+      onFechar={fechar}
       lateral
       titulo={atual.nome}
       subtitulo={`Recebido em ${formatarDataHora(atual.createdAt)}`}

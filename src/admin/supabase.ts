@@ -5,6 +5,10 @@ import type { Database } from './database'
 export const BUCKET_OBRAS = 'obras'
 export const BUCKET_ANEXOS = 'anexos'
 
+// Chave própria: não mistura a sessão do painel com um eventual cliente
+// anônimo do site público.
+const CHAVE_SESSAO = 'albano-luz-painel-auth'
+
 /**
  * Lido ANTES de criar o cliente, que consome e limpa o hash da URL.
  * Serve de reforço ao evento PASSWORD_RECOVERY, que pode disparar antes de o
@@ -29,9 +33,7 @@ function criarCliente() {
       persistSession: true,
       autoRefreshToken: true,
       detectSessionInUrl: true,
-      // Chave própria: não mistura a sessão do painel com um eventual cliente
-      // anônimo do site público.
-      storageKey: 'albano-luz-painel-auth',
+      storageKey: CHAVE_SESSAO,
     },
   })
 }
@@ -44,4 +46,18 @@ export const supabase: ClienteSupabase | null = supabaseConfigurado ? criarClien
 export function sb(): ClienteSupabase {
   if (!supabase) throw new Error('Supabase não configurado.')
   return supabase
+}
+
+/**
+ * Apaga a sessão do painel guardada no navegador (as chaves que o auth-js usa).
+ * Para quando o logout no servidor falha: o auth-js devolve o erro sem limpar.
+ */
+export function limparSessaoLocal(): void {
+  for (const chave of [CHAVE_SESSAO, `${CHAVE_SESSAO}-code-verifier`, `${CHAVE_SESSAO}-user`]) {
+    try {
+      window.localStorage.removeItem(chave)
+    } catch {
+      // Armazenamento bloqueado: a sessão fica só na memória, e recarregar a descarta.
+    }
+  }
 }

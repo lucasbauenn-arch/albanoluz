@@ -1,4 +1,4 @@
-import { srcSetDe } from '../../data/fotos'
+import { semSrcSetSeFalhar, srcSetDe } from '../../data/fotos'
 import type { Foto } from '../../types'
 
 interface Props {
@@ -21,6 +21,7 @@ export function Moldura({ foto, className = '', prioridade, escuro, mostrarLegen
         <img
           src={foto.url}
           srcSet={srcSetDe(foto.url)}
+          onError={semSrcSetSeFalhar}
           sizes="(min-width: 1024px) 50vw, 100vw"
           alt={foto.alt}
           width={1200}

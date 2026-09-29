@@ -23,17 +23,45 @@ import SeletorStatus from './SeletorStatus'
 import { STATUS_LEAD, ehStatusLead } from './status'
 
 type Mensagem = { tipo: 'sucesso' | 'erro'; texto: string }
+type ListaLeads = { leads: LeadAdmin[]; truncada: boolean }
 
-const LIMITE = 5000
+/**
+ * O PostgREST do Supabase devolve no máximo 1000 linhas por requisição (API
+ * settings → Max rows), mesmo pedindo mais. Por isso a lista vem em páginas.
+ */
+const POR_PAGINA = 1000
+/** Teto de segurança da lista (e do CSV); acima disso, mostra só os mais recentes. */
+const LIMITE = 20000
 
-async function buscarLeads(): Promise<Carga<LeadAdmin[]>> {
-  const { data, error } = await sb()
-    .from('leads')
-    .select('*')
-    .order('created_at', { ascending: false })
-    .limit(LIMITE)
-  if (error) return { tipo: 'erro', mensagem: mensagemErro(error, 'Não foi possível carregar os leads.') }
-  return { tipo: 'ok', dados: (data ?? []).map(mapearLead) }
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+const maisRecentePrimeiro = (a: LeadAdmin, b: LeadAdmin) => Date.parse(b.createdAt) - Date.parse(a.createdAt)
+
+async function buscarLeads(): Promise<Carga<ListaLeads>> {
+  const porId = new Map<string, LeadAdmin>()
+  let total: number | null = null
+  let de = 0
+  while (porId.size < LIMITE) {
+    const { data, error, count } = await sb()
+      .from('leads')
+      .select('*', de === 0 ? { count: 'exact' } : undefined)
+      .order('created_at', { ascending: false })
+      .order('id', { ascending: false })
+      .range(de, de + Math.min(POR_PAGINA, LIMITE - porId.size) - 1)
+    if (error) return { tipo: 'erro', mensagem: mensagemErro(error, 'Não foi possível carregar os leads.') }
+    if (typeof count === 'number') total = count
+    const pagina = data ?? []
+    // O Map descarta repetidos: um lead novo que chegue entre duas páginas
+    // empurra a lista uma posição para baixo.
+    for (const linha of pagina) porId.set(linha.id, mapearLead(linha))
+    de += pagina.length
+    // Avança pelo que veio (não pelo que foi pedido): funciona com qualquer Max rows.
+    if (pagina.length === 0 || (total !== null && porId.size >= total)) break
+  }
+  const leads = [...porId.values()].slice(0, LIMITE)
+  // Só é truncada quando parou no teto e ainda havia mais no banco.
+  const truncada = leads.length >= LIMITE && (total === null || total > LIMITE)
+  return { tipo: 'ok', dados: { leads, truncada } }
 }
 
 export default function LeadsAba() {
@@ -44,14 +72,21 @@ export default function LeadsAba() {
   const [busca, setBusca] = useState('')
   const [mensagem, setMensagem] = useState<Mensagem | null>(null)
   const [salvandoStatus, setSalvandoStatus] = useState<string | null>(null)
+  const [truncada, setTruncada] = useState(false)
+  // Resultado da busca pelo id de um lead que não está na lista (link direto).
+  const [buscaDireta, setBuscaDireta] = useState<{ id: string; tentativa: number; erro: string | null } | null>(
+    null,
+  )
+  const [tentativaBusca, setTentativaBusca] = useState(0)
 
-  const aplicar = useCallback((resultado: Carga<LeadAdmin[]>) => {
+  const aplicar = useCallback((resultado: Carga<ListaLeads>) => {
     if (resultado.tipo === 'erro') {
       // Se a lista já estava na tela, mantém e mostra só o aviso.
       setCarga((atual) => (atual.tipo === 'ok' ? atual : resultado))
       setMensagem({ tipo: 'erro', texto: resultado.mensagem })
-    } else {
-      setCarga(resultado)
+    } else if (resultado.tipo === 'ok') {
+      setCarga({ tipo: 'ok', dados: resultado.dados.leads })
+      setTruncada(resultado.dados.truncada)
     }
   }, [])
 
@@ -67,6 +102,7 @@ export default function LeadsAba() {
 
   async function carregar() {
     setAtualizando(true)
+    setTentativaBusca((t) => t + 1)
     aplicar(await buscarLeads())
     setAtualizando(false)
   }
@@ -104,6 +140,43 @@ export default function LeadsAba() {
 
   const idAberto = params.get('lead')
   const leadAberto = idAberto ? leads.find((l) => l.id === idAberto) ?? null : null
+
+  // Link direto (ex.: painel_url do e-mail) para um lead fora da lista: busca
+  // pelo id e, se existir, acrescenta à lista para as ações funcionarem igual.
+  const idParaBuscar =
+    idAberto && carga.tipo === 'ok' && !leadAberto && UUID.test(idAberto) ? idAberto : null
+  const resultadoDireto =
+    buscaDireta && buscaDireta.id === idParaBuscar && buscaDireta.tentativa === tentativaBusca ? buscaDireta : null
+  const buscandoDireto = idParaBuscar !== null && !resultadoDireto
+
+  useEffect(() => {
+    if (!idParaBuscar) return
+    let ativo = true
+    sb()
+      .from('leads')
+      .select('*')
+      .eq('id', idParaBuscar)
+      .maybeSingle()
+      .then(({ data, error }) => {
+        if (!ativo) return
+        if (data) {
+          const lead = mapearLead(data)
+          setCarga((atual) =>
+            atual.tipo === 'ok' && !atual.dados.some((l) => l.id === lead.id)
+              ? { tipo: 'ok', dados: [...atual.dados, lead].sort(maisRecentePrimeiro) }
+              : atual,
+          )
+        }
+        setBuscaDireta({
+          id: idParaBuscar,
+          tentativa: tentativaBusca,
+          erro: error ? mensagemErro(error, 'Não foi possível carregar este lead.') : null,
+        })
+      })
+    return () => {
+      ativo = false
+    }
+  }, [idParaBuscar, tentativaBusca])
 
   function abrir(id: string) {
     setParams((p) => {
@@ -293,7 +366,7 @@ export default function LeadsAba() {
               {filtrados.length === leads.length
                 ? `${leads.length} ${leads.length === 1 ? 'lead' : 'leads'}`
                 : `${filtrados.length} de ${leads.length} leads`}
-              {leads.length >= LIMITE && ` (exibindo os ${LIMITE} mais recentes)`}
+              {truncada && ` (exibindo os ${LIMITE.toLocaleString('pt-BR')} mais recentes)`}
             </p>
           </Cartao>
 
@@ -425,6 +498,8 @@ export default function LeadsAba() {
         key={leadAberto?.id ?? 'nenhum'}
         aberto={Boolean(idAberto) && carga.tipo === 'ok'}
         lead={leadAberto}
+        buscando={buscandoDireto}
+        erroBusca={resultadoDireto?.erro}
         onFechar={fechar}
         onAlterado={(mudancas) => leadAberto && substituirLocal(leadAberto.id, mudancas)}
         onExcluido={(lead) => {

@@ -1,5 +1,6 @@
 import { ArrowLeft, ArrowRight, LoaderCircle } from 'lucide-react'
 import { Link, useParams } from 'react-router'
+import { AvisoIlustrativas } from '../components/AvisoIlustrativas'
 import { BotaoWhatsApp } from '../components/BotaoWhatsApp'
 import { CtaOrcamento } from '../components/CtaOrcamento'
 import { Galeria } from '../components/Galeria'
@@ -7,6 +8,8 @@ import { ObraCard, SeloObra, metaObra } from '../components/ObraCard'
 import { CabecalhoPagina } from '../components/ui/CabecalhoPagina'
 import { Moldura } from '../components/ui/Moldura'
 import { botao } from '../components/ui/botao'
+import { SITE } from '../config/site'
+import { ehIlustrativa } from '../data/fotos'
 import { servicoPorSlug } from '../data/servicos'
 import { useConteudo } from '../lib/conteudo-dinamico'
 import { Seo, schemaBreadcrumb } from '../lib/head'
@@ -50,9 +53,14 @@ export default function Obra() {
     .slice(0, 3)
     .map((r) => r.o)
 
+  // No painel, descrição, serviços e cidade são opcionais: a frase usa só o que existir.
+  const listaServicos = servicos.map((s) => s.nomeCurto.toLowerCase()).join(', ')
+  const local = obra.cidade ? ` em ${obra.cidade}` : ''
   const descricao =
-    obra.descricao ??
-    `${obra.titulo}: ${servicos.map((s) => s.nomeCurto.toLowerCase()).join(', ')}${obra.cidade ? ` em ${obra.cidade}` : ''}.`
+    obra.descricao?.trim() ||
+    (listaServicos ? `${obra.titulo}: ${listaServicos}${local}.` : `${obra.titulo}${local} — portfólio da ${SITE.nome}.`)
+  // A capa do painel é enviada à parte; nos dados locais e no seed ela é a primeira foto.
+  const temGaleria = obra.fotos.some((f) => f.url !== obra.capa.url)
 
   return (
     <>
@@ -115,6 +123,7 @@ export default function Obra() {
             )}
           </dl>
           {obra.descricao && <p className="mt-8 text-lg text-grafite">{obra.descricao}</p>}
+          {ehIlustrativa(obra) && <AvisoIlustrativas unica className="mt-8" />}
           <div className="mt-8 flex flex-col gap-3 sm:flex-row lg:flex-col xl:flex-row">
             <Link to="/contato" className={botao('primario')}>
               Quero um projeto assim
@@ -125,7 +134,7 @@ export default function Obra() {
         </div>
       </section>
 
-      {obra.fotos.length > 1 && (
+      {temGaleria && (
         <section aria-labelledby="galeria" className="border-t border-marinho/10 bg-white py-16 sm:py-20">
           <div className="container-site">
             <h2 id="galeria" className="text-4xl text-marinho">
@@ -150,6 +159,7 @@ export default function Obra() {
               Voltar ao portfólio
             </Link>
           </div>
+          {relacionadas.some(ehIlustrativa) && <AvisoIlustrativas className="mt-6" />}
           <div className="mt-10 grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
             {relacionadas.map((o) => (
               <ObraCard key={o.id} obra={o} />

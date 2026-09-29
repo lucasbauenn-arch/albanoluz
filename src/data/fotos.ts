@@ -1,4 +1,5 @@
-import type { Foto } from '../types'
+import type { SyntheticEvent } from 'react'
+import type { Foto, Obra } from '../types'
 
 /**
  * Fotos PROVISÓRIAS do Unsplash (licença livre), baixadas por
@@ -44,8 +45,36 @@ export function foto(nome: NomeFoto, legenda?: string): Foto {
   return { url: fotoUrl(nome), alt: FOTOS[nome], legenda: legenda ?? null }
 }
 
-/** srcset para as fotos locais (1200px e 600px); undefined para outras imagens. */
+/**
+ * srcset para as fotos locais (1200px e 600px) e para as do bucket público "obras"
+ * do Supabase (1920px e 600px: cada upload do painel grava também `<nome>-600.<ext>`
+ * na mesma pasta). undefined para outras imagens.
+ */
 export function srcSetDe(url: string) {
-  const m = url.match(/^\/fotos\/([\w-]+)\.webp$/)
-  return m ? `/fotos/${m[1]}-600.webp 600w, /fotos/${m[1]}.webp 1200w` : undefined
+  const local = url.match(/^\/fotos\/([\w-]+)\.webp$/)
+  if (local) return `/fotos/${local[1]}-600.webp 600w, /fotos/${local[1]}.webp 1200w`
+  const storage = url.match(/^(https?:\/\/[^/?#]+\/storage\/v1\/object\/public\/obras\/[^?#\s,]+)\.(webp|jpg)$/)
+  if (storage) return `${storage[1]}-600.${storage[2]} 600w, ${storage[1]}.${storage[2]} 1920w`
+  return undefined
+}
+
+/**
+ * onError das imagens com srcset: se a variante -600 não existir (upload antigo ou
+ * que falhou pela metade), tira o srcset para o navegador carregar o `src` original.
+ */
+export function semSrcSetSeFalhar(e: SyntheticEvent<HTMLImageElement>) {
+  const img = e.currentTarget
+  if (img.srcset) img.removeAttribute('srcset')
+}
+
+/** Imagem genérica que src/lib/remoto.ts usa na obra do painel sem capa nem fotos. */
+export const IMAGEM_SEM_FOTO = '/ilustracoes/hero-estrutura.svg'
+
+/**
+ * true quando a obra usa imagens provisórias do repositório (/fotos/ ou /ilustracoes/):
+ * as obras ilustrativas de src/data/obras.ts e as do supabase/seed.sql. Obras reais
+ * cadastradas no painel usam URLs do Storage. A imagem genérica de obra sem foto não conta.
+ */
+export function ehIlustrativa(obra: Obra) {
+  return [obra.capa, ...obra.fotos].some((f) => f.url !== IMAGEM_SEM_FOTO && /^\/(fotos|ilustracoes)\//.test(f.url))
 }

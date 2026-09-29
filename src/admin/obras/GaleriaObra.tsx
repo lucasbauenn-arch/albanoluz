@@ -61,9 +61,12 @@ export default function GaleriaObra({
   }
 
   const fotos = carga.tipo === 'ok' ? carga.dados : []
+  // Uma ação por vez na galeria: salvar textos, mover, excluir ou enviar.
+  const bloqueada = ocupado !== null || enviando
 
-  function definirFotos(novas: FotoAdmin[]) {
-    setCarga({ tipo: 'ok', dados: novas })
+  /** Sempre a partir do estado atual, nunca da lista capturada no início da ação. */
+  function atualizarFotos(mudar: (atuais: FotoAdmin[]) => FotoAdmin[]) {
+    setCarga((atual) => (atual.tipo === 'ok' ? { tipo: 'ok', dados: mudar(atual.dados) } : atual))
   }
 
   function rascunhoDe(foto: FotoAdmin): Rascunho {
@@ -81,6 +84,7 @@ export default function GaleriaObra({
       document.getElementById(`alt-${foto.id}`)?.focus()
       return
     }
+    if (bloqueada) return
     setOcupado(foto.id)
     setMensagem(null)
     try {
@@ -88,7 +92,7 @@ export default function GaleriaObra({
       const { data, error } = await sb().from('obra_fotos').update(mudancas).eq('id', foto.id).select('id')
       if (error) throw error
       garantirAfetado(data)
-      definirFotos(fotos.map((f) => (f.id === foto.id ? { ...f, ...mudancas } : f)))
+      atualizarFotos((atuais) => atuais.map((f) => (f.id === foto.id ? { ...f, ...mudancas } : f)))
       setRascunhos((atual) => {
         const novo = { ...atual }
         delete novo[foto.id]
@@ -104,7 +108,8 @@ export default function GaleriaObra({
 
   async function mover(indice: number, direcao: -1 | 1) {
     const destino = indice + direcao
-    if (ocupado || destino < 0 || destino >= fotos.length) return
+    if (bloqueada || destino < 0 || destino >= fotos.length) return
+    // Com as ações bloqueadas durante qualquer operação, `fotos` é o estado atual.
     const anteriores = fotos
     const reordenadas = [...fotos]
     ;[reordenadas[indice], reordenadas[destino]] = [reordenadas[destino], reordenadas[indice]]
@@ -112,7 +117,7 @@ export default function GaleriaObra({
     const alteradas = renumeradas.filter((f) => anteriores.find((a) => a.id === f.id)?.ordem !== f.ordem)
     const movida = fotos[indice]
 
-    definirFotos(renumeradas)
+    atualizarFotos(() => renumeradas)
     setOcupado(movida.id)
     setMensagem(null)
     // Mantém o foco no botão usado (ou no oposto, se chegou à ponta).
@@ -135,14 +140,23 @@ export default function GaleriaObra({
         texto: `Foto movida para a posição ${destino + 1} de ${fotos.length}.`,
       })
     } catch (erro) {
-      definirFotos(anteriores)
-      setMensagem({ tipo: 'erro', texto: mensagemErro(erro, 'Não foi possível reordenar as fotos.') })
+      const texto = mensagemErro(erro, 'Não foi possível reordenar as fotos.')
+      // Parte das alterações pode ter sido gravada: relê a ordem real do banco.
+      const releitura = await buscarFotos(obraId)
+      if (releitura.tipo === 'ok') {
+        setCarga(releitura)
+        setMensagem({ tipo: 'erro', texto })
+      } else {
+        atualizarFotos(() => anteriores)
+        setMensagem({ tipo: 'erro', texto: `${texto} Recarregue a página para conferir a ordem salva.` })
+      }
     } finally {
       setOcupado(null)
     }
   }
 
   async function excluir(foto: FotoAdmin, posicao: number) {
+    if (bloqueada) return
     if (!window.confirm(`Excluir a foto ${posicao} da galeria? Esta ação não pode ser desfeita.`)) return
     setOcupado(foto.id)
     setMensagem(null)
@@ -150,10 +164,9 @@ export default function GaleriaObra({
       const { data, error } = await sb().from('obra_fotos').delete().eq('id', foto.id).select('id')
       if (error) throw error
       garantirAfetado(data)
-      const restantes = fotos.filter((f) => f.id !== foto.id)
-      definirFotos(restantes)
+      atualizarFotos((atuais) => atuais.filter((f) => f.id !== foto.id))
       // Só apaga o arquivo se nem a capa nem outra foto usam a mesma imagem.
-      if (foto.url !== capaUrl && !restantes.some((f) => f.url === foto.url)) {
+      if (foto.url !== capaUrl && !fotos.some((f) => f.id !== foto.id && f.url === foto.url)) {
         await removerImagens([foto.url])
       }
       setMensagem({ tipo: 'sucesso', texto: 'Foto excluída.' })
@@ -176,6 +189,7 @@ export default function GaleriaObra({
       document.getElementById('nova-foto-alt')?.focus()
       return
     }
+    if (bloqueada) return
     setEnviando(true)
     let url: string | null = null
     try {
@@ -188,7 +202,8 @@ export default function GaleriaObra({
         .single()
       if (error) throw error
       if (!data) throw new ErroPainel('A foto não foi registrada.')
-      definirFotos([...fotos, mapearFoto(data)])
+      const nova = mapearFoto(data)
+      atualizarFotos((atuais) => [...atuais, nova])
       setArquivo(null)
       setAlt('')
       setLegenda('')
@@ -244,7 +259,6 @@ export default function GaleriaObra({
             const r = rascunhoDe(foto)
             const alterada = r.alt !== foto.alt || r.legenda !== (foto.legenda ?? '')
             const posicao = i + 1
-            const bloqueada = ocupado !== null
             return (
               <li
                 key={foto.id}
@@ -293,12 +307,14 @@ export default function GaleriaObra({
                   )}
                 </div>
                 <div className="flex shrink-0 gap-1 sm:flex-col">
+                  {/* Durante uma reordenação os botões de mover seguem focáveis (o foco
+                      acompanha a foto); cliques extras são ignorados em mover(). */}
                   <Botao
                     id={`mover-cima-${foto.id}`}
                     variante="secundario"
                     tamanho="sm"
                     icone={ArrowUp}
-                    disabled={i === 0}
+                    disabled={enviando || i === 0}
                     onClick={() => void mover(i, -1)}
                     aria-label={`Mover foto ${posicao} para cima`}
                   />
@@ -307,7 +323,7 @@ export default function GaleriaObra({
                     variante="secundario"
                     tamanho="sm"
                     icone={ArrowDown}
-                    disabled={i === fotos.length - 1}
+                    disabled={enviando || i === fotos.length - 1}
                     onClick={() => void mover(i, 1)}
                     aria-label={`Mover foto ${posicao} para baixo`}
                   />
@@ -366,7 +382,7 @@ export default function GaleriaObra({
               value={legenda}
               onChange={(e) => setLegenda(e.target.value)}
             />
-            <Botao type="submit" icone={Upload} carregando={enviando} disabled={!arquivo}>
+            <Botao type="submit" icone={Upload} carregando={enviando} disabled={!arquivo || ocupado !== null}>
               {enviando ? 'Otimizando e enviando…' : 'Enviar foto'}
             </Botao>
           </div>

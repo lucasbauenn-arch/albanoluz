@@ -19,6 +19,25 @@ if (supabaseConfigurado) {
   const [obras, depoimentos] = await Promise.all([buscarObras(), buscarDepoimentos()])
   dados = { obras, depoimentos, fonte: 'supabase' }
   console.log(`Supabase: ${obras.length} obras e ${depoimentos.length} depoimentos publicados.`)
+  // Banco sem obra publicada (seed não rodou ou tudo em rascunho): o build sairia sem
+  // portfólio, sem as páginas das obras e sem elas no sitemap. Só segue se for pedido.
+  if (obras.length === 0) {
+    if (process.env.PERMITIR_PORTFOLIO_VAZIO !== '1') {
+      console.error(
+        [
+          '',
+          'ERRO: o Supabase está configurado (VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY), mas não há nenhuma obra publicada.',
+          'Provavelmente o seed (supabase/seed.sql) ainda não rodou no banco, ou nenhuma obra está marcada como publicada no painel.',
+          'Publicar este build tiraria do ar o portfólio, as páginas /portfolio/<slug> e as obras do sitemap.',
+          'Para publicar mesmo assim, defina a variável de ambiente PERMITIR_PORTFOLIO_VAZIO=1',
+          "(ex.: PERMITIR_PORTFOLIO_VAZIO=1 npm run build; no PowerShell: $env:PERMITIR_PORTFOLIO_VAZIO='1'; npm run build).",
+          '',
+        ].join('\n'),
+      )
+      process.exit(1)
+    }
+    console.warn('PERMITIR_PORTFOLIO_VAZIO=1: gerando o site com o portfólio vazio.')
+  }
 } else {
   console.warn('Supabase não configurado: usando obras ilustrativas de src/data/obras.ts.')
 }

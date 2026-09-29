@@ -1,3 +1,4 @@
+import { IMAGEM_SEM_FOTO } from '../data/fotos'
 import type { CategoriaObra, Depoimento, Obra, TipoObra } from '../types'
 import { SUPABASE_ANON_KEY, SUPABASE_URL } from './env'
 
@@ -43,7 +44,7 @@ export function obraDeRow(r: ObraRow): Obra {
     .map((f) => ({ url: f.url, alt: f.alt || r.titulo, legenda: f.legenda }))
   const capa = r.capa_url
     ? { url: r.capa_url, alt: r.capa_alt || r.titulo }
-    : fotos[0] ?? { url: '/ilustracoes/hero-estrutura.svg', alt: r.titulo }
+    : fotos[0] ?? { url: IMAGEM_SEM_FOTO, alt: r.titulo }
   return {
     id: r.id,
     slug: r.slug,

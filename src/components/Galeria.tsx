@@ -1,6 +1,6 @@
 import { ChevronLeft, ChevronRight, Expand, X } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
-import { srcSetDe } from '../data/fotos'
+import { semSrcSetSeFalhar, srcSetDe } from '../data/fotos'
 import type { Foto } from '../types'
 
 interface LightboxProps {
@@ -136,6 +136,7 @@ export function Galeria({ fotos, colunas = 'sm:grid-cols-2 lg:grid-cols-3' }: Ga
               <img
                 src={foto.url}
                 srcSet={srcSetDe(foto.url)}
+                onError={semSrcSetSeFalhar}
                 sizes="(min-width: 1024px) 400px, (min-width: 640px) 50vw, 100vw"
                 alt={foto.alt}
                 width={1200}

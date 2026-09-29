@@ -5,6 +5,7 @@
       "parameters": {
         "httpMethod": "POST",
         "path": "albano-luz-novo-lead",
+        "authentication": "headerAuth",
         "responseMode": "responseNode",
         "options": {}
       },
@@ -13,7 +14,13 @@
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2,
       "position": [0, 300],
-      "webhookId": "b7d3c0e4-8f1a-4c55-9e2b-6a1f0c3d9e21"
+      "webhookId": "b7d3c0e4-8f1a-4c55-9e2b-6a1f0c3d9e21",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "SUBSTITUIR_ID_CREDENCIAL_WEBHOOK",
+          "name": "Albano Luz — segredo do webhook"
+        }
+      }
     },
     {
       "parameters": {
@@ -26,12 +33,11 @@
           "conditions": [
             {
               "id": "c1e9a7b0-2b6f-4f1e-8d3a-5a9b7c2d4e01",
-              "leftValue": "={{ String($json.headers['x-webhook-secret'] ?? '') === String($env.ALBANO_WEBHOOK_SECRET ?? '') && $json.body?.evento === 'lead_enviado' }}",
-              "rightValue": "",
+              "leftValue": "={{ $json.body?.evento }}",
+              "rightValue": "lead_enviado",
               "operator": {
-                "type": "boolean",
-                "operation": "true",
-                "singleValue": true
+                "type": "string",
+                "operation": "equals"
               }
             }
           ],
@@ -40,7 +46,7 @@
         "options": {}
       },
       "id": "5f0c1a52-3d8e-4b7a-9a41-0c7d2e6b1a02",
-      "name": "Segredo confere?",
+      "name": "Evento confere?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2,
       "position": [240, 300]
@@ -48,13 +54,13 @@
     {
       "parameters": {
         "respondWith": "json",
-        "responseBody": "{ \"ok\": false, \"erro\": \"não autorizado\" }",
+        "responseBody": "{ \"ok\": false, \"erro\": \"evento desconhecido\" }",
         "options": {
-          "responseCode": 401
+          "responseCode": 400
         }
       },
       "id": "5f0c1a52-3d8e-4b7a-9a41-0c7d2e6b1a03",
-      "name": "Recusar (401)",
+      "name": "Recusar (400)",
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.1,
       "position": [480, 460]
@@ -111,16 +117,9 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "={{ $env.EVOLUTION_URL }}/message/sendText/{{ $env.EVOLUTION_INSTANCE }}",
-        "sendHeaders": true,
-        "headerParameters": {
-          "parameters": [
-            {
-              "name": "apikey",
-              "value": "={{ $env.EVOLUTION_APIKEY }}"
-            }
-          ]
-        },
+        "url": "https://PREENCHA-A-URL-DA-EVOLUTION.invalid/message/sendText/PREENCHA-A-INSTANCIA",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "={{ JSON.stringify({ number: '5511932742355', text: $('Montar mensagens').first().json.whatsapp }) }}",
@@ -133,6 +132,12 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [1200, 200],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "SUBSTITUIR_ID_CREDENCIAL_EVOLUTION",
+          "name": "Evolution API — apikey"
+        }
+      },
       "onError": "continueRegularOutput"
     }
   ],
@@ -141,14 +146,14 @@
       "main": [
         [
           {
-            "node": "Segredo confere?",
+            "node": "Evento confere?",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Segredo confere?": {
+    "Evento confere?": {
       "main": [
         [
           {
@@ -159,7 +164,7 @@
         ],
         [
           {
-            "node": "Recusar (401)",
+            "node": "Recusar (400)",
             "type": "main",
             "index": 0
           }

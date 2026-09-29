@@ -24,11 +24,16 @@ export function semAcentos(texto: string): string {
 
 export const SLUG_VALIDO = /^[a-z0-9]+(-[a-z0-9]+)*$/
 
-export function gerarSlug(texto: string): string {
+/** Limite do banco (check char_length(slug) <= 120 na migração). */
+export const SLUG_MAXIMO = 120
+/** Slug gerado a partir do título fica mais curto que o limite do banco. */
+const SLUG_DO_TITULO = 80
+
+export function gerarSlug(texto: string, limite = SLUG_DO_TITULO): string {
   return semAcentos(texto)
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
-    .slice(0, 80)
+    .slice(0, limite)
     .replace(/-+$/g, '')
 }
 

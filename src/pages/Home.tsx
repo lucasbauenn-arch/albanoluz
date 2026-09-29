@@ -1,5 +1,6 @@
 import { ArrowRight, Check, Mail } from 'lucide-react'
 import { Link } from 'react-router'
+import { AvisoIlustrativas } from '../components/AvisoIlustrativas'
 import { BotaoWhatsApp } from '../components/BotaoWhatsApp'
 import { LinhaDoTempo } from '../components/LinhaDoTempo'
 import { ObraCard } from '../components/ObraCard'
@@ -9,6 +10,7 @@ import { TituloSecao } from '../components/ui/TituloSecao'
 import { botao } from '../components/ui/botao'
 import { SITE, emailUrl, instagramUrl } from '../config/site'
 import { DIFERENCIAIS, NUMEROS } from '../data/conteudo'
+import { ehIlustrativa } from '../data/fotos'
 import { ILUSTRACOES, iluUrl } from '../data/ilustracoes'
 import { SERVICOS_PROJETO, SERVICO_EXECUCAO } from '../data/servicos'
 import { useConteudo } from '../lib/conteudo-dinamico'
@@ -17,6 +19,7 @@ import { Seo } from '../lib/head'
 export default function Home() {
   const { obras } = useConteudo()
   const destaques = [...obras.filter((o) => o.destaque), ...obras.filter((o) => !o.destaque)].slice(0, 6)
+  const destaquesIlustrativos = destaques.some(ehIlustrativa)
 
   return (
     <>
@@ -157,7 +160,8 @@ export default function Home() {
             <ArrowRight aria-hidden="true" className="size-4" />
           </Link>
         </div>
-        <div className="mt-12 grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
+        {destaquesIlustrativos && <AvisoIlustrativas className="mt-10" />}
+        <div className={`${destaquesIlustrativos ? 'mt-8' : 'mt-12'} grid gap-6 sm:grid-cols-2 lg:grid-cols-3`}>
           {destaques.map((obra) => (
             <ObraCard key={obra.id} obra={obra} />
           ))}

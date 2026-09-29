@@ -1,9 +1,15 @@
 -- =============================================================================
 -- Carga inicial: 12 obras ILUSTRATIVAS (mesmo conteúdo de src/data/obras.ts).
 --
+-- ATENÇÃO: nenhuma destas obras é real. As fotos são de banco de imagens (Unsplash)
+-- e as pranchas são desenhos provisórios; títulos, cidades e anos são exemplos.
+-- Enquanto houver obra ilustrativa publicada (o site as reconhece pelas imagens em
+-- /fotos/ e /ilustracoes/), o site mostra um aviso de conteúdo ilustrativo. Conforme
+-- as obras reais forem cadastradas no painel (/admin → Obras), despublique ou exclua
+-- as ilustrativas.
+--
 -- As imagens são caminhos locais do site (/fotos/*.webp e /ilustracoes/*.svg); o site público
--- trata URLs começando com "/" como arquivos próprios. Substitua pelas fotos
--- reais pelo painel (/admin → Obras) assim que o cliente enviar o material.
+-- trata URLs começando com "/" como arquivos próprios.
 --
 -- Idempotente: obras cujo slug já existe são ignoradas (fotos incluídas).
 -- =============================================================================
@@ -87,8 +93,8 @@ with nova as (
     'São Paulo, SP',
     2024,
     'Galpão com vão livre para operação logística. Projeto estrutural, fundação em sapatas e execução da obra pela nossa equipe.',
-    '/fotos/galpao-docas.webp',
-    'Galpão comercial com fachada cinza e docas de carga',
+    '/fotos/galpao-portoes.webp',
+    'Fachada de galpão com portões de docas de carga',
     true,
     true,
     3
@@ -101,9 +107,9 @@ select nova.id, f.url, f.alt, f.legenda, f.ordem
 from nova
 cross join (
   values
-    ('/fotos/galpao-docas.webp', 'Galpão comercial com fachada cinza e docas de carga', null::text, 0),
-    ('/fotos/galpao-portoes.webp', 'Fachada de galpão com portões de docas de carga', null::text, 1),
-    ('/fotos/galpao-cobertura-metalica.webp', 'Galpão com estrutura e cobertura metálica em fase de acabamento', null::text, 2),
+    ('/fotos/galpao-portoes.webp', 'Fachada de galpão com portões de docas de carga', null::text, 0),
+    ('/fotos/galpao-cobertura-metalica.webp', 'Galpão com estrutura e cobertura metálica em fase de acabamento', null::text, 1),
+    ('/fotos/galpao-docas.webp', 'Galpão comercial com fachada cinza e docas de carga', null::text, 2),
     ('/ilustracoes/formas-galpao.svg', 'Planta de formas de galpão com eixos e pilares', null::text, 3)
 ) as f (url, alt, legenda, ordem);
 

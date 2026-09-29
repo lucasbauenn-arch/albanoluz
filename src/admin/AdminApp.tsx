@@ -19,7 +19,7 @@ import DepoimentosAba from './depoimentos/DepoimentosAba'
 import { classeBotao } from './estilos'
 import LeadsAba from './leads/LeadsAba'
 import ObrasAba from './obras/ObrasAba'
-import { chegouPorLinkDeRecuperacao, erroLinkEmail, sb, supabase } from './supabase'
+import { chegouPorLinkDeRecuperacao, erroLinkEmail, limparSessaoLocal, sb, supabase } from './supabase'
 import { Aviso } from './ui'
 import { cx, mensagemErro } from './util'
 
@@ -102,8 +102,20 @@ function ComSessao() {
   const { acesso, tentarDeNovo } = useAcessoAdmin(sessao?.user.id ?? null)
 
   const sair = useCallback(async () => {
-    const { error } = await sb().auth.signOut({ scope: 'local' })
-    if (error) console.warn('Falha ao sair:', error.message)
+    let falha: unknown = null
+    try {
+      falha = (await sb().auth.signOut({ scope: 'local' })).error
+    } catch (erro) {
+      falha = erro
+    }
+    // Deu certo: o evento SIGNED_OUT leva de volta ao login.
+    if (!falha) return
+    // Falha de rede ou 5xx no /logout: a sessão continuaria no navegador (e o
+    // botão Sair travado). Apaga à mão, pensando em computador compartilhado,
+    // e recarrega: o painel volta na tela de login.
+    console.warn('Falha ao encerrar a sessão no servidor; limpando a sessão local:', falha)
+    limparSessaoLocal()
+    window.location.reload()
   }, [])
 
   if (carregando) return <TelaCarregando texto="Carregando o painel…" />

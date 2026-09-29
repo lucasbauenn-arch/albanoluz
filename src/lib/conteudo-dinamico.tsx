@@ -7,7 +7,10 @@ import { buscarDepoimentos, buscarObras } from './remoto'
 export interface DadosIniciais {
   obras: Obra[]
   depoimentos: Depoimento[]
-  /** "local" = obras ilustrativas de src/data/obras.ts; "supabase" = painel admin. */
+  /**
+   * "local" = src/data/obras.ts; "supabase" = banco (painel admin). Não diz se as obras
+   * são ilustrativas (o seed grava as mesmas no banco): para isso, `ehIlustrativa`.
+   */
   fonte: 'local' | 'supabase'
 }
 

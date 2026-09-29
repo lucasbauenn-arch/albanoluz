@@ -22,7 +22,7 @@ import {
   Cartao,
   Carregando,
 } from '../ui'
-import { ErroPainel, SLUG_VALIDO, gerarSlug, mensagemErro, ouNulo, type Carga } from '../util'
+import { ErroPainel, SLUG_MAXIMO, SLUG_VALIDO, gerarSlug, mensagemErro, ouNulo, type Carga } from '../util'
 import AvisoPreRenderizacao from './AvisoPreRenderizacao'
 import GaleriaObra from './GaleriaObra'
 
@@ -333,7 +333,7 @@ export default function ObraEditor({
                 id="obra-slug"
                 rotulo="Endereço da página (slug)"
                 obrigatorio
-                maxLength={120}
+                maxLength={SLUG_MAXIMO}
                 value={form.slug}
                 erro={erros.slug}
                 autoCapitalize="none"
@@ -348,7 +348,8 @@ export default function ObraEditor({
                   atualizar('slug', e.target.value.toLowerCase().replace(/\s+/g, '-'))
                 }}
                 onBlur={() => {
-                  const limpo = gerarSlug(form.slug)
+                  // Só normaliza: o slug digitado pode ir até o limite do banco.
+                  const limpo = gerarSlug(form.slug, SLUG_MAXIMO)
                   if (limpo !== form.slug) atualizar('slug', limpo)
                 }}
               />

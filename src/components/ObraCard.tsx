@@ -1,5 +1,5 @@
 import { Link } from 'react-router'
-import { srcSetDe } from '../data/fotos'
+import { semSrcSetSeFalhar, srcSetDe } from '../data/fotos'
 import { nomeServico } from '../data/servicos'
 import { CATEGORIA_LABEL, TIPO_LABEL, type Obra } from '../types'
 
@@ -32,6 +32,7 @@ export function ObraCard({ obra, nivel = 'h3' }: { obra: Obra; nivel?: 'h2' | 'h
         <img
           src={obra.capa.url}
           srcSet={srcSetDe(obra.capa.url)}
+          onError={semSrcSetSeFalhar}
           sizes="(min-width: 1024px) 400px, (min-width: 640px) 50vw, 100vw"
           alt={obra.capa.alt}
           width={1200}
