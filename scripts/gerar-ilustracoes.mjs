@@ -917,7 +917,7 @@ function ogSVG() {
     T(80, 330, 'Cálculo estrutural seguro', { ff, fs: 38, fill: '#fff' }),
     T(80, 378, 'e econômico para arquitetos', { ff, fs: 38, fill: '#fff' }),
     T(80, 426, 'e construtoras', { ff, fs: 38, fill: '#fff' }),
-    T(80, 500, '+7 anos · +700 projetos entregues', { ff: sf, fs: 21, fill: NV4, ls: 0.6 }),
+    T(80, 500, '+10 anos · +900 projetos entregues', { ff: sf, fs: 21, fill: NV4, ls: 0.6 }),
     T(80, 566, 'albanoluz.com', { ff: sf, fs: 15, fill: '#fff', op: 0.55, ls: 2.5 }),
   ];
   const fade = `<linearGradient id="fade" x1="0" x2="1" y1="0" y2="0"><stop offset="0" stop-color="${NAVY}" stop-opacity=".9"/><stop offset=".72" stop-color="${NAVY}" stop-opacity=".6"/><stop offset="1" stop-color="${NAVY}" stop-opacity="0"/></linearGradient>`;

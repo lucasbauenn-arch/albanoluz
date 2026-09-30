@@ -9,7 +9,7 @@ export const SITE = {
   nomeCurto: 'Albano Luz',
   url: 'https://albanoluz.com',
   descricao:
-    'Cálculo estrutural e projetos complementares para arquitetos, construtoras e donos de obra. Mais de 700 projetos entregues com segurança e economia.',
+    'Cálculo estrutural e projetos complementares para arquitetos, construtoras e donos de obra. Mais de 900 projetos entregues com segurança e economia.',
 
   whatsapp: '5511932742355',
   whatsappExibicao: '(11) 93274-2355',
@@ -22,8 +22,8 @@ export const SITE = {
   uf: 'SP',
   areaAtendida: 'São Paulo e região',
 
-  anosMercado: 7,
-  projetosEntregues: 700,
+  anosMercado: 10,
+  projetosEntregues: 900,
 
   // PENDENTE: CNPJ e dados do responsável técnico.
   cnpj: null as string | null,

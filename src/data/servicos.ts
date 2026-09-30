@@ -60,7 +60,7 @@ export const SERVICOS: Servico[] = [
       'Cálculo estrutural em concreto armado e alvenaria estrutural, seguro, econômico e compatível com a arquitetura.',
     descricao: [
       'É o nosso principal serviço. Calculamos e detalhamos a estrutura de residências, sobrados, edifícios multifamiliares, comércios e galpões, em concreto armado convencional ou em alvenaria estrutural.',
-      'Cada projeto é modelado em software de cálculo e revisado por engenheiro, seguindo a NBR 6118 (estruturas de concreto) e a NBR 16868 (alvenaria estrutural). O resultado é uma estrutura que respeita o projeto arquitetônico e usa apenas o aço e o concreto necessários.',
+      'Cada projeto é calculado e revisado, seguindo a NBR 6118 (estruturas de concreto) e a NBR 16868 (alvenaria estrutural). O resultado é uma estrutura que respeita o projeto arquitetônico e usa apenas o aço e o concreto necessários.',
     ],
     destaques: [
       {
