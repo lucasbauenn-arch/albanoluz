@@ -67,6 +67,15 @@ A lista está em `.env.example` (Supabase, Turnstile, GA4 e Meta Pixel).
 
 Antes do primeiro deploy com o Supabase, siga a ordem de [supabase/README.md](./supabase/README.md): migrações (incluindo a de limites de envio) e seed, cadastro público desligado e função `enviar-lead` publicada com os secrets, incluindo os do aviso por e-mail (SMTP). No projeto atual, migrações, seed e função já estão no ar: falta cadastrar os secrets SMTP e publicar de novo a função (veja a [situação atual](./supabase/README.md#situação-atual)). Com o Supabase configurado, o build lê as obras do banco e **falha se não houver nenhuma obra publicada**. Para gerar mesmo assim, cadastre `PERMITIR_PORTFOLIO_VAZIO=1` no mesmo lugar das variáveis `VITE_*` da hospedagem (num build local, a mensagem de erro do build mostra o comando) e apague essa variável assim que houver obras publicadas.
 
+**Hostinger (hospedagem atual do albanoluz.com)**: o build é feito no computador e os arquivos são enviados para a pasta `public_html`.
+
+1. Com o `.env` configurado (variáveis `VITE_SUPABASE_*`), rode `npm run build` e confira no log `Supabase: N obras e M depoimentos publicados.`
+2. Compacte o **conteúdo** da pasta `dist/` (não a pasta em si), incluindo o arquivo `.htaccess`. No PowerShell: `Compress-Archive -Path dist\* -DestinationPath site-albanoluz-hostinger.zip -Force`.
+3. No hPanel: **Gerenciador de Arquivos** → `public_html` → envie o zip, extraia ali mesmo (substituindo os arquivos) e apague o zip.
+4. Limpe o cache da CDN da Hostinger no hPanel e deixe ligada a opção de forçar HTTPS.
+
+O `public/.htaccess` faz as URLs limpas funcionarem (`/sobre` → `sobre.html`, `/admin` → `admin.html`), usa o `404.html` e define cache e cabeçalhos de segurança. Sem ele, só os endereços terminados em `.html` abrem.
+
 **Cloudflare Pages**: comando de build `npm run build`, diretório `dist`. Cadastre as variáveis `VITE_*` do `.env.example` nas configurações do projeto (ambiente Production e, se usar, Preview) e, depois de qualquer mudança nelas, faça um novo deploy (**Deployments → Retry deployment** no último deploy de produção). O `public/_headers` já define cache e cabeçalhos de segurança; URLs sem `.html` e o `404.html` funcionam nativamente.
 
 **EasyPanel / VPS**: use o `Dockerfile` (build estático + nginx). No EasyPanel, cadastre as variáveis `VITE_*` (e, só se precisar, `PERMITIR_PORTFOLIO_VAZIO`) nas variáveis de ambiente (*Environment*) do serviço do site: o EasyPanel as repassa ao build como *build args*. O `Dockerfile` declara um `ARG` para cada uma, e só as declaradas chegam ao build; o `.env` não entra na imagem. Depois de mudar alguma, clique em **Deploy** para refazer o build.
